@@ -431,7 +431,15 @@ static int freertos_verify_target_match(struct rtosState *rtos, struct SymbolSet
 }
 
 
-/* Operations table for FreeRTOS */
+static uint32_t freertos_get_watchpoint_addr(struct rtosState *rtos)
+{
+    if (!rtos || !rtos->priv)
+        return 0;
+    struct freertos_private *priv = (struct freertos_private *)rtos->priv;
+    return priv->pxCurrentTCB_addr;
+}
+
+
 static const struct rtosOps freertos_ops =
 {
     .read_thread_info = freertos_read_thread_info,
@@ -441,7 +449,8 @@ static const struct rtosOps freertos_ops =
     .cleanup = freertos_cleanup,
     .get_state_name = freertos_get_state_name,
     .is_idle_thread = freertos_is_idle_thread,
-    .verify_target_match = freertos_verify_target_match
+    .verify_target_match = freertos_verify_target_match,
+    .get_watchpoint_addr = freertos_get_watchpoint_addr
 };
 
 
