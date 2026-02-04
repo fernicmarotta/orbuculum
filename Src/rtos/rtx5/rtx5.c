@@ -108,12 +108,19 @@ struct rtx5_private
     uint32_t thread_run_curr;
     uint32_t pendSV_Handler;
     uint32_t osRtxThreadListPut;
+    uint8_t id_offset;
+    uint8_t name_offset;
+    uint8_t priority_offset;
+    uint8_t thread_addr_offset;
+    uint8_t info_os_id_offset;
+    uint8_t info_kernel_offset;
+    uint8_t info_thread_run_curr_offset;
 };
 
 
-static int rtx5_read_thread_info(struct rtosState *rtos, 
+static int rtx5_read_thread_info(struct rtosState *rtos,
                                  struct SymbolSet *symbols,
-                                 struct rtosThread *thread, 
+                                 struct rtosThread *thread,
                                  uint32_t tcb_addr)
 {
     if (!rtos || !thread || !tcb_addr)
@@ -121,24 +128,26 @@ static int rtx5_read_thread_info(struct rtosState *rtos,
         genericsReport(V_ERROR, "rtx5_read_thread_info: Invalid parameters\n");
         return -1;
     }
-    
+
+    struct rtx5_private *priv = (struct rtx5_private *)rtos->priv;
+
     if (tcb_addr == 0x00000000 || tcb_addr == 0xFFFFFFFF)
     {
         genericsReport(V_WARN, "rtx5_read_thread_info: Invalid TCB address 0x%08X\n", tcb_addr);
         strcpy(thread->name, "INVALID");
         return -1;
     }
-    
-    uint32_t id_word = rtosReadMemoryWord(tcb_addr + RTX5_THREAD_ID_OFFSET);
+
+    uint32_t id_word = rtosReadMemoryWord(tcb_addr + priv->id_offset);
     uint8_t thread_id = (uint8_t)(id_word & 0xFF);
     if (thread_id != RTX5_ID_THREAD)
     {
-        genericsReport(V_DEBUG, "RTX5: Not a thread at TCB=0x%08X - ID=0x%02X (expected 0xF1)\n", 
+        genericsReport(V_DEBUG, "RTX5: Not a thread at TCB=0x%08X - ID=0x%02X (expected 0xF1)\n",
                       tcb_addr, thread_id);
         return -1;
     }
-    
-    uint32_t name_ptr = rtosReadMemoryWord(tcb_addr + RTX5_THREAD_NAME_OFFSET);
+
+    uint32_t name_ptr = rtosReadMemoryWord(tcb_addr + priv->name_offset);
     thread->name_ptr = name_ptr;
     
     uint32_t old_name_hash = thread->name_hash;
@@ -169,7 +178,7 @@ static int rtx5_read_thread_info(struct rtosState *rtos,
         strcpy(thread->name, "UNNAMED");
     }
     
-    uint32_t thread_func = rtosReadMemoryWord(tcb_addr + RTX5_THREAD_THREAD_ADDR_OFFSET);
+    uint32_t thread_func = rtosReadMemoryWord(tcb_addr + priv->thread_addr_offset);
     thread->entry_func = thread_func & ~1;
     
     if (!thread_func || thread_func == 0xFFFFFFFF)
@@ -190,7 +199,7 @@ static int rtx5_read_thread_info(struct rtosState *rtos,
         thread->entry_func_name = NULL;
     }
     
-    uint32_t priority_word = rtosReadMemoryWord(tcb_addr + RTX5_THREAD_PRIORITY_OFFSET);
+    uint32_t priority_word = rtosReadMemoryWord(tcb_addr + priv->priority_offset);
     thread->priority = (int8_t)(priority_word & 0xFF);
     
     if (thread->priority < -3 || thread->priority > 56)
@@ -245,21 +254,29 @@ static int rtx5_init(struct rtosState *rtos, struct SymbolSet *symbols)
     {
         return -1;
     }
-    
+
     struct rtx5_private *priv = calloc(1, sizeof(struct rtx5_private));
     if (!priv)
     {
         return -1;
     }
-    
+
+    priv->id_offset = RTX5_THREAD_ID_OFFSET;
+    priv->name_offset = RTX5_THREAD_NAME_OFFSET;
+    priv->priority_offset = RTX5_THREAD_PRIORITY_OFFSET;
+    priv->thread_addr_offset = RTX5_THREAD_THREAD_ADDR_OFFSET;
+    priv->info_os_id_offset = RTX5_INFO_OS_ID_OFFSET;
+    priv->info_kernel_offset = RTX5_INFO_KERNEL_OFFSET;
+    priv->info_thread_run_curr_offset = RTX5_INFO_THREAD_RUN_CURR_OFFSET;
+
     rtos->priv = priv;
-    
+
     if (symbols && symbols->elfFile)
     {
         char cmd[512];
         FILE *fp;
         char line[256];
-        
+
         snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep 'osRtxInfo$'", symbols->elfFile);
         fp = popen(cmd, "r");
         if (fp && fgets(line, sizeof(line), fp))
@@ -270,7 +287,7 @@ static int rtx5_init(struct rtosState *rtos, struct SymbolSet *symbols)
         {
             pclose(fp);
         }
-        
+
         if (priv->osRtxInfo == 0)
         {
             genericsReport(V_ERROR, "osRtxInfo symbol not found in ELF!" EOL);
@@ -278,10 +295,40 @@ static int rtx5_init(struct rtosState *rtos, struct SymbolSet *symbols)
             rtos->priv = NULL;
             return -1;
         }
-        
-        priv->thread_run_curr = priv->osRtxInfo + RTX5_INFO_THREAD_RUN_CURR_OFFSET;
+
+        int32_t off;
+
+        off = SymbolGetStructOffset(symbols, "osRtxInfo_t", "os_id");
+        if (off >= 0)
+            priv->info_os_id_offset = (uint8_t)off;
+
+        off = SymbolGetStructOffset(symbols, "osRtxInfo_t", "kernel");
+        if (off >= 0)
+            priv->info_kernel_offset = (uint8_t)off;
+
+        off = SymbolGetStructOffset(symbols, "osRtxInfo_t", "thread.run.curr");
+        if (off >= 0)
+            priv->info_thread_run_curr_offset = (uint8_t)off;
+
+        priv->thread_run_curr = priv->osRtxInfo + priv->info_thread_run_curr_offset;
+
+        off = SymbolGetStructOffset(symbols, "osRtxThread_t", "id");
+        if (off >= 0)
+            priv->id_offset = (uint8_t)off;
+
+        off = SymbolGetStructOffset(symbols, "osRtxThread_t", "name");
+        if (off >= 0)
+            priv->name_offset = (uint8_t)off;
+
+        off = SymbolGetStructOffset(symbols, "osRtxThread_t", "priority");
+        if (off >= 0)
+            priv->priority_offset = (uint8_t)off;
+
+        off = SymbolGetStructOffset(symbols, "osRtxThread_t", "thread_addr");
+        if (off >= 0)
+            priv->thread_addr_offset = (uint8_t)off;
     }
-    
+
     return 0;
 }
 
@@ -352,7 +399,7 @@ static int rtx5_verify_target_match(struct rtosState *rtos, struct SymbolSet *sy
         }
     }
     
-    uint32_t os_id_ptr = rtosReadMemoryWord(priv->osRtxInfo + RTX5_INFO_OS_ID_OFFSET);
+    uint32_t os_id_ptr = rtosReadMemoryWord(priv->osRtxInfo + priv->info_os_id_offset);
     if (!os_id_ptr || os_id_ptr == 0xFFFFFFFF)
     {
         genericsReport(V_ERROR, "RTX5: Cannot read os_id pointer from osRtxInfo at 0x%08X" EOL, priv->osRtxInfo);
@@ -378,7 +425,7 @@ static int rtx5_verify_target_match(struct rtosState *rtos, struct SymbolSet *sy
     
     genericsReport(V_INFO, "RTX5: Target verified - Version: %s" EOL, version_buf);
     
-    uint32_t kernel_state = rtosReadMemoryWord(priv->osRtxInfo + RTX5_INFO_KERNEL_OFFSET);
+    uint32_t kernel_state = rtosReadMemoryWord(priv->osRtxInfo + priv->info_kernel_offset);
     if (kernel_state == 0 || kernel_state == 0xFFFFFFFF)
     {
         genericsReport(V_WARN, "RTX5: Kernel state invalid (0x%08X) - possible target mismatch" EOL, kernel_state);
