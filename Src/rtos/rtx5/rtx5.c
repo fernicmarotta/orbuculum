@@ -434,6 +434,16 @@ static int rtx5_verify_target_match(struct rtosState *rtos, struct SymbolSet *sy
     return RTOS_VERIFY_SUCCESS;
 }
 
+
+static uint32_t rtx5_get_watchpoint_addr(struct rtosState *rtos)
+{
+    if (!rtos || !rtos->priv)
+        return 0;
+    struct rtx5_private *priv = (struct rtx5_private *)rtos->priv;
+    return priv->thread_run_curr;
+}
+
+
 static const struct rtosOps rtx5_ops =
 {
     .read_thread_info = rtx5_read_thread_info,
@@ -443,7 +453,8 @@ static const struct rtosOps rtx5_ops =
     .cleanup = rtx5_cleanup,
     .get_state_name = rtx5_get_state_name,
     .is_idle_thread = rtx5_is_idle_thread,
-    .verify_target_match = rtx5_verify_target_match
+    .verify_target_match = rtx5_verify_target_match,
+    .get_watchpoint_addr = rtx5_get_watchpoint_addr
 };
 
 void rtosRegisterRTX5(void)
