@@ -5,17 +5,41 @@
 #include "generics.h"
 #include "symbols.h"
 #include "rtos_support.h"
-#include <rtos/rtx5.h>
+#include <rtos/rtx5/rtx5.h>
+#include <rtos/freertos/freertos.h>
 #include <output_handler.h>
 #include "uthash.h"
 
 
-struct rtx5_private {
-    uint32_t osRtxInfo;
-    uint32_t thread_run_curr;
-    uint32_t pendSV_Handler;
-    uint32_t osRtxThreadListPut;
+/* -------------------------------------------------------------------------
+ * RTOS Registry - extensible list of supported RTOS types
+ * ------------------------------------------------------------------------- */
+
+struct rtosRegistry {
+    const char *name;
+    const char *alias;
+    enum rtosType type;
+    const struct rtosOps *(*getOps)(void);
 };
+
+static const struct rtosRegistry rtos_registry[] = {
+    { "rtx5",     "rtxv5",    RTOS_RTX5,     rtx5GetOps     },
+    { "freertos", "FreeRTOS", RTOS_FREERTOS, freertosGetOps },
+    { NULL, NULL, RTOS_NONE, NULL }
+};
+
+
+static const struct rtosRegistry *find_rtos_by_name(const char *name)
+{
+    for (const struct rtosRegistry *r = rtos_registry; r->name; r++)
+    {
+        if (strcasecmp(name, r->name) == 0 ||
+            (r->alias && strcasecmp(name, r->alias) == 0))
+            return r;
+    }
+    return NULL;
+}
+
 
 /* Hash for unresolved function addresses */
 struct unresolvedFunc {
@@ -104,7 +128,7 @@ static uint32_t findOsRtxInfoAddress(const char *elfFile)
         /* Parse line like: "20004000 g     O RW_KERNEL	000000a4 .hidden osRtxInfo" */
         char *endptr;
         address = strtoul(line, &endptr, 16);
-        if (endptr == line) address = 0; /* Conversion failed */
+        if (endptr == line) address = 0;
     }
     
     pclose(fp);
@@ -112,65 +136,66 @@ static uint32_t findOsRtxInfoAddress(const char *elfFile)
 }
 
 
-/* Initialize RTOS tracking */
-struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *requested_type, int options_telnetPort, uint32_t cpu_freq)
+struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *requested_type,
+                                    int options_telnetPort, uint32_t cpu_freq)
 {
-    if (!requested_type) return NULL;
-    
-    struct rtosState *rtos = calloc(1, sizeof(struct rtosState));
-    if (!rtos) return NULL;
-    
-    rtos->cpu_freq = cpu_freq;
-    rtos->telnet_port = options_telnetPort;
-    
-    if (strcasecmp(requested_type, "rtx5") == 0 || 
-        strcasecmp(requested_type, "rtxv5") == 0) {
-        rtos->type = RTOS_RTX5;
-        rtos->name = "RTX5";
-        rtos->ops = rtx5GetOps();
-        
-        if (rtos->ops && rtos->ops->init) {
-            if (rtos->ops->init(rtos, symbols) < 0) {
-                genericsReport(V_ERROR, "Failed to initialize RTX5" EOL);
-                free(rtos);
-                return NULL;
-            }
-        }
-        
-        /* Verify target match if telnet is configured */
-        if (rtos->ops && rtos->ops->verify_target_match && options_telnetPort > 0) {
-            int verify_result = rtos->ops->verify_target_match(rtos, symbols);
-            if (verify_result == RTOS_VERIFY_MISMATCH) {
-                /* Only exit on real mismatch */
-                free(rtos);
-                return NULL;
-            } else if (verify_result == RTOS_VERIFY_NO_CONNECTION) {
-                genericsReport(V_INFO, "RTOS verification pending - telnet not ready yet" EOL);
-            }
-        }
-        
-        /* Initialize timing for first thread detection */
-        rtos->last_switch_time = genericsTimestampuS();
-        
-        if (rtos->priv) {
-            struct rtx5_private *priv = (struct rtx5_private*)rtos->priv;
-            if (priv->thread_run_curr && options_telnetPort > 0) {
-                genericsReport(V_INFO, "Configuring DWT for address 0x%08X via telnet" EOL, priv->thread_run_curr);
-                rtosConfigureDWT(priv->thread_run_curr);
-            } else if (options_telnetPort <= 0) {
-                genericsReport(V_WARN, "Telnet not configured, DWT not auto-configured" EOL);
-            }
-        }
-        
-        rtos->enabled = true;
-    } else {
+    if (!requested_type)
+        return NULL;
+
+    const struct rtosRegistry *reg = find_rtos_by_name(requested_type);
+    if (!reg)
+    {
         genericsReport(V_ERROR, "Unknown RTOS type: %s" EOL, requested_type);
-        free(rtos);
+        genericsReport(V_ERROR, "Supported: rtx5, freertos" EOL);
         return NULL;
     }
-    
+
+    struct rtosState *rtos = calloc(1, sizeof(struct rtosState));
+    if (!rtos)
+        return NULL;
+
+    rtos->type = reg->type;
+    rtos->name = reg->name;
+    rtos->ops = reg->getOps();
+    rtos->cpu_freq = cpu_freq;
+    rtos->telnet_port = options_telnetPort;
+
+    if (rtos->ops && rtos->ops->init)
+    {
+        if (rtos->ops->init(rtos, symbols) < 0)
+        {
+            genericsReport(V_ERROR, "Failed to initialize %s" EOL, rtos->name);
+            free(rtos);
+            return NULL;
+        }
+    }
+
+    if (rtos->ops && rtos->ops->verify_target_match && options_telnetPort > 0)
+    {
+        int result = rtos->ops->verify_target_match(rtos, symbols);
+        if (result == RTOS_VERIFY_MISMATCH)
+        {
+            free(rtos);
+            return NULL;
+        }
+    }
+
+    rtos->last_switch_time = genericsTimestampuS();
+
+    if (rtos->ops && rtos->ops->get_watchpoint_addr && options_telnetPort > 0)
+    {
+        uint32_t wp_addr = rtos->ops->get_watchpoint_addr(rtos);
+        if (wp_addr)
+        {
+            genericsReport(V_INFO, "Configuring DWT watchpoint at 0x%08X" EOL, wp_addr);
+            rtosConfigureDWT(wp_addr);
+        }
+    }
+
+    rtos->enabled = true;
     return rtos;
 }
+
 
 void rtosFree(struct rtosState *rtos)
 {
@@ -554,8 +579,10 @@ static void calculateColumnWidths(struct rtosState *rtos, struct ColumnWidths *w
         len = strlen(func_str);
         if (len > widths->function) widths->function = len;
         
-        /* Priority name */
-        const char *pri_name = rtx5GetPriorityName(thread->priority);
+        /* Priority name - use RTOS-specific function */
+        const char *pri_name = (rtos->ops && rtos->ops->get_priority_name)
+            ? rtos->ops->get_priority_name(thread->priority)
+            : "Unknown";
         len = strlen(pri_name);
         if (len > widths->priority) widths->priority = len;
         
@@ -623,7 +650,9 @@ static void printThreadRow(FILE *f, struct ColumnWidths *widths, struct rtosThre
     /* Get thread info strings */
     char func_str[64];
     getThreadFunctionString(thread, func_str, sizeof(func_str));
-    const char *pri_name = rtx5GetPriorityName(thread->priority);
+    const char *pri_name = (rtos->ops && rtos->ops->get_priority_name)
+        ? rtos->ops->get_priority_name(thread->priority)
+        : "Unknown";
     
     if (rtos->cpu_freq == 0) {
         fprintf(f, "| %-*s | 0x%08X | %-*s | %-*s | %*s | %*.3f | %*.3f | %*" PRIu64 " |\n",
@@ -774,13 +803,11 @@ void rtosDumpThreadInfo(struct rtosState *rtos, FILE *f, uint64_t window_time_us
         printTableSeparator(f, &widths);
         
         if (has_idle_concept) {
-            /* Show active CPU (non-idle threads only) */
             display_pct = (active_accum_us * 10000) / window_time_us;
-            
-            /* Update max CPU usage if needed */
-            if (display_pct > rtos->max_cpu_usage) {
-                rtos->max_cpu_usage = display_pct;
-            }
+            if (display_pct > 10000) display_pct = 10000;
+
+            if (rtos->max_cpu_usage > 10000) rtos->max_cpu_usage = display_pct;
+            if (display_pct > rtos->max_cpu_usage) rtos->max_cpu_usage = display_pct;
             
             fprintf(f, "Interval: %" PRIu64 " ms, CPU Usage: %.3f%%,  Max: %.3f%%, CPU Freq: ",
                 window_time_us/1000, display_pct / 100.0, rtos->max_cpu_usage / 100.0);
@@ -790,8 +817,8 @@ void rtosDumpThreadInfo(struct rtosState *rtos, FILE *f, uint64_t window_time_us
                 fprintf(f, "NA");
             }
         } else {
-            /* Show total for RTOS without idle concept */
             display_pct = (total_accum_us * 10000) / window_time_us;
+            if (display_pct > 10000) display_pct = 10000;
             fprintf(f, "Window: %" PRIu64 " ms, Total CPU: %.3f%%", 
                 window_time_us/1000, display_pct / 100.0);
         }
