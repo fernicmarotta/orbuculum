@@ -32,7 +32,7 @@ static void send_udp_json(OutputConfig *config, const char *json_str)
 
 static void output_json_object(OutputConfig *config, cJSON *obj) 
 {
-    if (!obj) 
+    if (!config || !obj) 
         return;
     
     char *json_str = cJSON_PrintUnformatted(obj);
@@ -118,7 +118,7 @@ void output_json_exception_entry(OutputConfig *config, ExceptionOutput *exceptio
     {
         cJSON *item = cJSON_CreateObject();
         if (!item) 
-        return;
+            return;
         
         cJSON_AddNumberToObject(item, "ex", 1);
         cJSON_AddNumberToObject(item, "num", exception->exception_num);

@@ -107,6 +107,9 @@ void output_console_exception_entry(OutputConfig *config, ExceptionOutput *excep
 
 void output_console_stats(OutputConfig *config, StatsOutput *stats) 
 {
+    if (!config || !stats)
+        return;
+    
     static uint32_t last_overflow = 0;
     static uint32_t last_sync = 0;
     static uint32_t last_errors = 0;
