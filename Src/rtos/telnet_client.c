@@ -6,11 +6,14 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <sys/select.h>
 #include <uthash.h>
 #include <generics.h>
 
 static int _telnetSocket = -1;
+static char _telnetHost[256] = "127.0.0.1";  /* Default host, inherited from -s option */
+static int _telnetPort = 4444;               /* Default port, configured via -W option */
 
 struct memCache {
     uint32_t addr;
@@ -19,6 +22,19 @@ struct memCache {
     UT_hash_handle hh;
 };
 static struct memCache *_memCache = NULL;
+
+void telnet_set_connection_params(const char *host, int port)
+{
+    if (host && strlen(host) > 0)
+    {
+        strncpy(_telnetHost, host, sizeof(_telnetHost) - 1);
+        _telnetHost[sizeof(_telnetHost) - 1] = '\0';
+    }
+    if (port > 0)
+    {
+        _telnetPort = port;
+    }
+}
 
 static void _drainSocket(int socket) 
 {
@@ -89,26 +105,51 @@ static int _readLine(int socket, char *buffer, int maxlen, int timeout_ms)
     return pos;
 }
 
-int telnet_connect(int port) 
+int telnet_connect(int port)
 {
     if (_telnetSocket >= 0)
         return _telnetSocket;
-    
+
     _telnetSocket = socket(AF_INET, SOCK_STREAM, 0);
-    if (_telnetSocket < 0) 
+    if (_telnetSocket < 0)
     {
         genericsReport(V_DEBUG, "Failed to create socket\n");
         return -1;
     }
-    
+
     struct sockaddr_in addr;
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
-    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    
-    if (connect(_telnetSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0) 
+
+    /* Resolve hostname using getaddrinfo to support both IPs and hostnames */
+    struct addrinfo hints = {0}, *result = NULL;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    if (getaddrinfo(_telnetHost, port_str, &hints, &result) == 0 && result)
     {
-        genericsReport(V_DEBUG, "Failed to connect to telnet port %d\n", port);
+        memcpy(&addr, result->ai_addr, sizeof(struct sockaddr_in));
+        freeaddrinfo(result);
+    }
+    else
+    {
+        /* Fallback to inet_addr for direct IP addresses */
+        addr.sin_addr.s_addr = inet_addr(_telnetHost);
+        if (addr.sin_addr.s_addr == INADDR_NONE)
+        {
+            genericsReport(V_DEBUG, "Failed to resolve hostname %s\n", _telnetHost);
+            close(_telnetSocket);
+            _telnetSocket = -1;
+            return -1;
+        }
+    }
+
+    if (connect(_telnetSocket, (struct sockaddr *)&addr, sizeof(addr)) < 0)
+    {
+        genericsReport(V_DEBUG, "Failed to connect to %s:%d\n", _telnetHost, port);
         close(_telnetSocket);
         _telnetSocket = -1;
         return -1;
@@ -145,15 +186,15 @@ bool telnet_is_connected(void)
     return _telnetSocket >= 0;
 }
 
-uint32_t telnet_read_memory_word(uint32_t address) 
+uint32_t telnet_read_memory_word(uint32_t address)
 {
     struct memCache *cached;
     HASH_FIND_INT(_memCache, &address, cached);
     if (cached) {
         return cached->value;
     }
-    
-    if (telnet_connect(4444) < 0)
+
+    if (telnet_connect(_telnetPort) < 0)
         return 0;
     
     char cmd[64];
@@ -209,8 +250,8 @@ uint32_t telnet_read_memory_word(uint32_t address)
 char* telnet_read_memory_string(uint32_t address, char *buffer, size_t maxlen) {
     if (!address || !buffer || maxlen < 2)
         return NULL;
-    
-    if (telnet_connect(4444) < 0)
+
+    if (telnet_connect(_telnetPort) < 0)
         return NULL;
     
     char cmd[64];
@@ -293,8 +334,8 @@ void telnet_clear_cache_for_tcb(uint32_t tcb_addr) {
 }
 
 void telnet_configure_dwt(uint32_t watch_address) {
-    if (telnet_connect(4444) < 0) {
-        genericsReport(V_ERROR, "Cannot connect to OpenOCD telnet\n");
+    if (telnet_connect(_telnetPort) < 0) {
+        genericsReport(V_ERROR, "Cannot connect to OpenOCD telnet at %s:%d\n", _telnetHost, _telnetPort);
         return;
     }
     
@@ -315,15 +356,39 @@ void telnet_configure_exception_trace(bool enable) {
         genericsReport(V_ERROR, "Failed to create socket for exception trace\n");
         return;
     }
-    
+
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(4444);
-    server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    
+    server_addr.sin_port = htons(_telnetPort);
+
+    /* Resolve hostname using getaddrinfo to support both IPs and hostnames */
+    struct addrinfo hints = {0}, *result = NULL;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", _telnetPort);
+
+    if (getaddrinfo(_telnetHost, port_str, &hints, &result) == 0 && result)
+    {
+        memcpy(&server_addr, result->ai_addr, sizeof(struct sockaddr_in));
+        freeaddrinfo(result);
+    }
+    else
+    {
+        /* Fallback to inet_addr for direct IP addresses */
+        server_addr.sin_addr.s_addr = inet_addr(_telnetHost);
+        if (server_addr.sin_addr.s_addr == INADDR_NONE)
+        {
+            genericsReport(V_ERROR, "Failed to resolve hostname %s for exception trace\n", _telnetHost);
+            close(sock);
+            return;
+        }
+    }
+
     if (connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        genericsReport(V_ERROR, "Cannot connect to OpenOCD telnet for exception trace\n");
+        genericsReport(V_ERROR, "Cannot connect to %s:%d for exception trace\n", _telnetHost, _telnetPort);
         close(sock);
         return;
     }

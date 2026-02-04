@@ -118,6 +118,7 @@ static void _initOutput( void )
         {
             _outputConfig->mode = OUTPUT_JSON_UDP;
             _outputConfig->udp_dest = calloc(1, sizeof(struct sockaddr_in));
+            _outputConfig->udp_host = options.server;
             if (_outputConfig->udp_dest)
             {
                 _outputConfig->udp_dest->sin_port = htons(options.udpPort);
@@ -161,7 +162,7 @@ static void _reinitializeRTOS( void )
     
     /* Close telnet connection to force fresh reconnect */
     _closeTelnet();
-    
+
     /* Clean up existing RTOS state */
     if ( _r.rtos )
     {
@@ -169,7 +170,10 @@ static void _reinitializeRTOS( void )
         rtosFree( _r.rtos );
         _r.rtos = NULL;
     }
-    
+
+    /* Reconfigure telnet connection parameters from command line options */
+    telnet_set_connection_params(options.server, options.telnetPort);
+
     /* Wait for OpenOCD telnet to be ready - retry up to 10 times */
     for ( int retry = 0; retry < 10; retry++ )
     {
@@ -178,7 +182,7 @@ static void _reinitializeRTOS( void )
             genericsReport( V_INFO, "Waiting for OpenOCD telnet to be ready... (attempt %d/10)" EOL, retry + 1 );
             usleep( 500000 ); /* Wait 500ms between retries */
         }
-        
+
         _r.rtos = rtosDetectAndInit(_r.s, options.rtos, options.telnetPort, options.cpuFreq);
         if ( _r.rtos )
         {
@@ -689,6 +693,9 @@ int main( int argc, char *argv[] )
     /* Initialize RTOS support if requested */
     if ( options.rtos )
     {
+        /* Configure telnet connection parameters from command line options */
+        telnet_set_connection_params(options.server, options.telnetPort);
+
         _r.rtos = rtosDetectAndInit(_r.s, options.rtos, options.telnetPort, options.cpuFreq);
         if ( !_r.rtos )
         {
