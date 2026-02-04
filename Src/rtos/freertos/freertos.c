@@ -6,7 +6,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <symbols.h>
-#include <freertos.h>
+#include <rtos/freertos/freertos.h>
 #include <telnet_client.h>
 #include <generics.h>
 #include <rtos_support.h>
@@ -118,7 +118,9 @@ static void detect_entry_function(struct rtosThread *thread,
     if (!pxEndOfStack || pxEndOfStack == 0xFFFFFFFF || pxEndOfStack <= pxTopOfStack)
         return;
 
-    uint32_t scan_limit = pxEndOfStack - (FREERTOS_MAX_STACK_SCAN_WORDS * 4);
+    uint32_t scan_limit = (pxEndOfStack > FREERTOS_MAX_STACK_SCAN_WORDS * 4) 
+        ? pxEndOfStack - (FREERTOS_MAX_STACK_SCAN_WORDS * 4)
+        : pxTopOfStack;
     if (scan_limit < pxTopOfStack)
         scan_limit = pxTopOfStack;
 

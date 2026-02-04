@@ -5,7 +5,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <symbols.h>
-#include <rtx5.h>
+#include <rtos/rtx5/rtx5.h>
 #include <telnet_client.h>
 #include <generics.h>
 #include <rtos_support.h>
@@ -169,7 +169,7 @@ static int rtx5_read_thread_info(struct rtosState *rtos,
             }
         }
     else
-    {
+        {
             strcpy(thread->name, "UNNAMED");
         }
     }
@@ -219,6 +219,7 @@ static int rtx5_read_thread_info(struct rtosState *rtos,
             {
                 genericsReport(V_INFO, "Thread REUSED detected: TCB=0x%08X, resetting statistics\n", tcb_addr);
                 thread->accumulated_time_us = 0;
+                thread->accumulated_cycles = 0;
                 thread->context_switches = 0;
                 thread->max_cpu_percent = 0;
                 return 1;
