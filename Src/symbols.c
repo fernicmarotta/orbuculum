@@ -991,6 +991,41 @@ int32_t SymbolGetStructOffset( struct SymbolSet *s, const char *struct_name, con
     pclose( f );
     return offset;
 }
+// ====================================================================================================
+int32_t SymbolGetStructFieldSize( struct SymbolSet *s, const char *struct_name, const char *field_name )
+{
+    if ( !s || !s->elfFile || !struct_name || !field_name )
+    {
+        return -1;
+    }
+
+    char commandLine[MAX_LINE_LEN];
+    char line[MAX_LINE_LEN];
+    FILE *f;
+    int32_t size = -1;
+
+    snprintf( commandLine, MAX_LINE_LEN,
+              "gdb-multiarch -batch -ex \"print sizeof(((%s*)0)->%s)\" %s 2>/dev/null",
+              struct_name, field_name, s->elfFile );
+
+    f = popen( commandLine, "r" );
+    if ( !f )
+    {
+        return -1;
+    }
+
+    if ( fgets( line, MAX_LINE_LEN, f ) )
+    {
+        char *eq = strchr( line, '=' );
+        if ( eq )
+        {
+            size = (int32_t)strtol( eq + 1, NULL, 10 );
+        }
+    }
+
+    pclose( f );
+    return size;
+}
 
 // ====================================================================================================
 void SymbolSetDelete( struct SymbolSet **s )
