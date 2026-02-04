@@ -132,6 +132,7 @@ bool SymbolSetValid( struct SymbolSet **s, char *filename );
 const char *SymbolFilename( struct SymbolSet *s, uint32_t index );
 const char *SymbolFunction( struct SymbolSet *s, uint32_t index );
 bool SymbolLookup( struct SymbolSet *s, uint32_t addr, struct nameEntry *n );
+int32_t SymbolGetStructOffset( struct SymbolSet *s, const char *struct_name, const char *field_name );
 // ====================================================================================================
 
 #ifdef __cplusplus
