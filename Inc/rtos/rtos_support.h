@@ -15,10 +15,12 @@
 #include "uthash.h"
 
 /* RTOS Thread Entry */
+#define RTOS_THREAD_NAME_MAX_LEN 64
+
 struct rtosThread {
     /* Thread identification */
     uint32_t tcb_addr;              /* Thread control block address (key) */
-    char name[64];                  /* Thread name (from memory or "UNNAMED") */
+    char name[RTOS_THREAD_NAME_MAX_LEN]; /* Thread name (from memory or "UNNAMED") */
     uint32_t entry_func;            /* Thread entry function address */
     const char *entry_func_name;    /* Thread entry function name from symbols */
     int8_t priority;                /* Thread priority (signed for RTX5) */
@@ -44,7 +46,6 @@ enum rtosType {
     RTOS_NONE = 0,
     RTOS_RTX5,
     RTOS_FREERTOS,
-    RTOS_THREADX,
     RTOS_UNKNOWN
 };
 
