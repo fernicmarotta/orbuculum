@@ -91,6 +91,9 @@ struct rtosOps {
     
     /* Verify RTOS version match between ELF and target (optional) */
     int (*verify_target_match)(struct rtosState *rtos, struct SymbolSet *symbols);
+
+    /* Get address to watch for context switches (for DWT configuration) */
+    uint32_t (*get_watchpoint_addr)(struct rtosState *rtos);
 };
 
 /* RTOS State */
