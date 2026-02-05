@@ -223,17 +223,7 @@ const char *rtosLookupPointerAsFunction(struct SymbolSet *symbols, uint32_t ptr_
         if (name) return name;
     }
     
-    struct unresolvedFunc *uf;
-    HASH_FIND_INT(unresolvedFuncs, &ptr_value, uf);
-    if (!uf) {
-        uf = malloc(sizeof(struct unresolvedFunc));
-        if (uf) {
-            uf->addr = ptr_value;
-            HASH_ADD_INT(unresolvedFuncs, addr, uf);
-        }
-        genericsReport(V_WARN, "No symbol found for function at 0x%08X" EOL, ptr_value);
-    }
-    return "Unknown Function";
+    return NULL;
 }
 
 /* Resolve thread info from pointers */
@@ -277,7 +267,15 @@ static struct rtosThread *find_or_create_thread(struct rtosState *rtos, struct S
     HASH_FIND_INT(rtos->threads, &tcb_addr, thread);
 
     if (thread)
+    {
+        /* Retry reading info if name is still unknown */
+        if (telnet_port > 0 && rtos->ops && rtos->ops->read_thread_info &&
+            rtos_name_is_unknown(thread->name))
+        {
+            rtos->ops->read_thread_info(rtos, symbols, thread, tcb_addr);
+        }
         return thread;
+    }
 
     thread = calloc(1, sizeof(struct rtosThread));
     if (!thread)
@@ -302,7 +300,7 @@ static struct rtosThread *find_or_create_thread(struct rtosState *rtos, struct S
     }
     else
     {
-        strcpy(thread->name, "UNNAMED");
+        strcpy(thread->name, RTOS_NAME_UNKNOWN);
     }
 
     return thread;

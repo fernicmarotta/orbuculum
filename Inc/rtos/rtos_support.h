@@ -12,10 +12,23 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include "uthash.h"
 
 /* RTOS Thread Entry */
 #define RTOS_THREAD_NAME_MAX_LEN 64
+
+/* Unknown name constants - use these instead of hardcoded strings */
+#define RTOS_NAME_UNKNOWN    "UNNAMED"
+#define RTOS_NAME_NO_NAME    "No Name"
+
+/* Check if thread name is unknown/unresolved */
+static inline bool rtos_name_is_unknown(const char *name)
+{
+    return (!name || name[0] == '\0' ||
+            strcmp(name, RTOS_NAME_UNKNOWN) == 0 ||
+            strcmp(name, RTOS_NAME_NO_NAME) == 0);
+}
 
 struct rtosThread {
     /* Thread identification */

@@ -170,12 +170,12 @@ static int rtx5_read_thread_info(struct rtosState *rtos,
         }
     else
         {
-            strcpy(thread->name, "UNNAMED");
+            strcpy(thread->name, RTOS_NAME_UNKNOWN);
         }
     }
     else
     {
-        strcpy(thread->name, "UNNAMED");
+        strcpy(thread->name, RTOS_NAME_UNKNOWN);
     }
     
     uint32_t thread_func = rtosReadMemoryWord(tcb_addr + priv->thread_addr_offset);
@@ -215,7 +215,7 @@ static int rtx5_read_thread_info(struct rtosState *rtos,
     {
         if (old_name_hash != thread->name_hash && old_func_hash != thread->func_hash)
         {
-            if (strcmp(thread->name, "UNNAMED") != 0 || thread->entry_func != 0)
+            if (!rtos_name_is_unknown(thread->name) || thread->entry_func != 0)
             {
                 genericsReport(V_INFO, "Thread REUSED detected: TCB=0x%08X, resetting statistics\n", tcb_addr);
                 thread->accumulated_time_us = 0;
