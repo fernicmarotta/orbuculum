@@ -46,17 +46,20 @@ const char *freertosGetPriorityName(int8_t priority)
 static bool read_thread_name(struct rtosThread *thread, uint32_t tcb_addr,
                              uint8_t name_offset, uint8_t max_name_len)
 {
-    if (thread->name[0] != 0 && strcmp(thread->name, "No Name") != 0)
-        return true;  /* Already cached */
+    if (!rtos_name_is_unknown(thread->name))
+        return true;
 
     uint32_t name_addr = tcb_addr + name_offset;
     char name_buf[RTOS_THREAD_NAME_MAX_LEN] = {0};
     size_t read_len = (max_name_len < sizeof(name_buf) - 1) ? max_name_len : sizeof(name_buf) - 1;
 
     char *name_str = rtosReadMemoryString(name_addr, name_buf, read_len + 1);
+    
     if (!name_str || name_buf[0] < 0x20 || name_buf[0] >= 0x7F)
     {
-        strcpy(thread->name, "No Name");
+        /* Keep temporary name but don't cache permanently - will retry */
+        if (thread->name[0] == 0)
+            strcpy(thread->name, RTOS_NAME_NO_NAME);
         return false;
     }
 
@@ -115,6 +118,7 @@ static void detect_entry_function(struct rtosThread *thread,
         return;
 
     uint32_t pxEndOfStack = rtosReadMemoryWord(tcb_addr + priv->end_of_stack_offset);
+    
     if (!pxEndOfStack || pxEndOfStack == 0xFFFFFFFF || pxEndOfStack <= pxTopOfStack)
         return;
 
@@ -124,13 +128,19 @@ static void detect_entry_function(struct rtosThread *thread,
     if (scan_limit < pxTopOfStack)
         scan_limit = pxTopOfStack;
 
-    for (uint32_t addr = pxEndOfStack; addr >= scan_limit; addr -= 4)
+    /* Scan from below pxEndOfStack (it's usually fill pattern at the top) */
+    uint32_t scan_start = pxEndOfStack - 4;
+
+    for (uint32_t addr = scan_start; addr >= scan_limit && addr >= 4; addr -= 4)
     {
         uint32_t val = rtosReadMemoryWord(addr);
         if ((val & ~1) == priv->prvTaskExitError_addr)
         {
+            /* First try: original stack layout - entry PC is at addr+4 (above prvTaskExitError) */
             uint32_t entry_pc = rtosReadMemoryWord(addr + 4) & ~1;
-            if (entry_pc && entry_pc != 0xFFFFFFFF && symbols)
+            if (entry_pc && entry_pc != 0xFFFFFFFF && 
+                entry_pc != 0xA5A5A5A4 && entry_pc != 0xA5A5A5A5 &&
+                (entry_pc & 0xFFFFFF00) != 0xFFFFFF00)
             {
                 const char *func_name = rtosLookupPointerAsFunction(symbols, entry_pc);
                 if (func_name)
@@ -140,6 +150,32 @@ static void detect_entry_function(struct rtosThread *thread,
                     return;
                 }
             }
+            
+            /* Fallback: Scan DOWN from prvTaskExitError (toward SP) for entry function.
+             * The entry function's return address is saved when it calls other functions.
+             * Limit to 16 words (64 bytes) to avoid too many memory reads. */
+            for (int i = 1; i <= 16; i++)
+            {
+                uint32_t candidate_addr = addr - (i * 4);
+                if (candidate_addr < pxTopOfStack) break;
+                
+                uint32_t candidate = rtosReadMemoryWord(candidate_addr) & ~1;
+                /* Filter out invalid values: NULL, fill patterns, EXC_RETURN (0xFFFFFFxx) */
+                if (candidate && candidate != 0xFFFFFFFF && 
+                    candidate != 0xA5A5A5A4 && candidate != 0xA5A5A5A5 &&
+                    candidate != priv->prvTaskExitError_addr &&
+                    (candidate & 0xFFFFFF00) != 0xFFFFFF00)
+                {
+                    const char *func_name = rtosLookupPointerAsFunction(symbols, candidate);
+                    if (func_name)
+                    {
+                        thread->entry_func = candidate;
+                        thread->entry_func_name = func_name;
+                        return;
+                    }
+                }
+            }
+            return;
         }
     }
 }
@@ -169,7 +205,7 @@ static bool check_thread_reuse(struct rtosThread *thread,
 
     if (old_name_hash != thread->name_hash && old_func_hash != thread->func_hash)
     {
-        if (strcmp(thread->name, "No Name") != 0)
+        if (!rtos_name_is_unknown(thread->name))
         {
             genericsReport(V_INFO, "Thread REUSED: TCB=0x%08X, resetting stats" EOL, tcb_addr);
             thread->accumulated_time_us = 0;
@@ -211,11 +247,6 @@ static int freertos_read_thread_info(struct rtosState *rtos,
     apply_known_task_names(thread);
 
     bool reused = check_thread_reuse(thread, old_name_hash, old_func_hash, tcb_addr);
-
-    genericsReport(V_DEBUG, "FreeRTOS: TCB=0x%08X '%s' func=%s pri=%d" EOL,
-                  tcb_addr, thread->name,
-                  thread->entry_func_name ? thread->entry_func_name : "-",
-                  thread->priority);
 
     return reused ? 1 : 0;
 }
