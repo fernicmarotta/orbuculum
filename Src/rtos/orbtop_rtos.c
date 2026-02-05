@@ -297,6 +297,14 @@ void _handleException( struct excMsg *m, struct ITMDecoder *i )
     
     genericsReport( V_DEBUG, "Exception event: num=%d, type=%d" EOL, m->exceptionNumber, m->eventType );
 
+    /* Exception #1 is Reset - reinitialize RTOS when we see it */
+    if ( m->exceptionNumber == 1 && m->eventType == EXEVENT_ENTER )
+    {
+        genericsReport( V_INFO, "Reset exception detected, reinitializing RTOS" EOL );
+        _reinitializeRTOS();
+        return;
+    }
+
     switch ( m->eventType )
     {
         case EXEVENT_ENTER:
