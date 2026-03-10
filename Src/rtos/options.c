@@ -49,7 +49,7 @@ void options_print_help(const char *progName) {
     fprintf(stdout, "  -p, --protocol:      Protocol (OFLOW|ITM)\n");
     fprintf(stdout, "  -P, --pace:          <microseconds> Delay in data transmission\n");
     fprintf(stdout, "  -s, --server:        <Server>:<Port> (default localhost:%d)\n", OFCLIENT_SERVER_PORT);
-    fprintf(stdout, "  -T, --rtos:          <type> RTOS type (rtx5, freertos)\n");
+    fprintf(stdout, "  -T, --rtos:          <type> RTOS type (rtx5, freertos, zephyr)\n");
     fprintf(stdout, "  -S, --rtos-sort:     Sort: cpu|maxcpu|tcb|name|func|priority|switches\n");
     fprintf(stdout, "  -W, --telnet-port:   <port> Telnet port for OpenOCD (default 4444)\n");
     fprintf(stdout, "  -t, --tag:           <stream> OFLOW tag (default 1)\n");

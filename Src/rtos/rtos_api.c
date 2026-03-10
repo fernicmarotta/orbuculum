@@ -7,6 +7,7 @@
 #include "rtos_support.h"
 #include <rtos/rtx5/rtx5.h>
 #include <rtos/freertos/freertos.h>
+#include <rtos/zephyr/zephyr.h>
 #include <output_handler.h>
 #include "uthash.h"
 
@@ -25,6 +26,7 @@ struct rtosRegistry {
 static const struct rtosRegistry rtos_registry[] = {
     { "rtx5",     "rtxv5",    RTOS_RTX5,     rtx5GetOps     },
     { "freertos", "FreeRTOS", RTOS_FREERTOS, freertosGetOps },
+    { "zephyr",   "Zephyr",   RTOS_ZEPHYR,   zephyrGetOps   },
     { NULL, NULL, RTOS_NONE, NULL }
 };
 
@@ -121,7 +123,7 @@ struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *reque
     if (!reg)
     {
         genericsReport(V_ERROR, "Unknown RTOS type: %s" EOL, requested_type);
-        genericsReport(V_ERROR, "Supported: rtx5, freertos" EOL);
+        genericsReport(V_ERROR, "Supported: rtx5, freertos, zephyr" EOL);
         return NULL;
     }
 
