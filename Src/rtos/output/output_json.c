@@ -183,8 +183,16 @@ void output_json_rtos_threads(OutputConfig *config, struct rtosState *rtos, uint
     struct rtosThread *thread, *tmp;
     uint64_t active_accum_us = 0;
     uint64_t total_accum_us = 0;
+    uint64_t total_cycles = 0;
+    uint64_t active_cycles = 0;
     bool has_idle_concept = false;
-    
+
+    /* First pass: calculate total cycles for normalization */
+    HASH_ITER(hh, rtos->threads, thread, tmp)
+    {
+        total_cycles += thread->accumulated_cycles;
+    }
+
     cJSON *root = cJSON_CreateObject();
     if (!root) return;
     
@@ -201,16 +209,20 @@ void output_json_rtos_threads(OutputConfig *config, struct rtosState *rtos, uint
         if (!thread_obj) continue;
         
         uint32_t cpu_pct = 0;
-        if (window_time_us > 0)
+        if (thread->accumulated_cycles > 0 && total_cycles > 0)
+        {
+            cpu_pct = (uint32_t)((thread->accumulated_cycles * 10000ULL) / total_cycles);
+        }
+        else if (window_time_us > 0 && thread->accumulated_time_us > 0)
         {
             uint64_t temp = (uint64_t)thread->accumulated_time_us * 10000ULL;
             cpu_pct = (uint32_t)(temp / window_time_us);
-            if (cpu_pct > 10000) cpu_pct = 10000;
         }
-        
+        if (cpu_pct > 10000) cpu_pct = 10000;
+
         /* Track totals for overall CPU usage calculation */
         total_accum_us += thread->accumulated_time_us;
-        
+
         /* Check if this is an idle thread using RTOS-specific method */
         bool is_idle = false;
         if (rtos->ops && rtos->ops->is_idle_thread)
@@ -221,6 +233,7 @@ void output_json_rtos_threads(OutputConfig *config, struct rtosState *rtos, uint
         if (!is_idle)
         {
             active_accum_us += thread->accumulated_time_us;
+            active_cycles += thread->accumulated_cycles;
         }
         else
         {
@@ -233,7 +246,11 @@ void output_json_rtos_threads(OutputConfig *config, struct rtosState *rtos, uint
         cJSON_AddStringToObject(thread_obj, "name", thread->name);
         cJSON_AddStringToObject(thread_obj, "func", thread->entry_func_name ? thread->entry_func_name : "unknown");
         cJSON_AddNumberToObject(thread_obj, "prio", thread->priority);
-        cJSON_AddNumberToObject(thread_obj, "time_ms", thread->accumulated_time_us / 1000);
+
+        uint64_t time_ms = (thread->accumulated_cycles > 0 && total_cycles > 0)
+            ? (thread->accumulated_cycles * (window_time_us / 1000)) / total_cycles
+            : thread->accumulated_time_us / 1000;
+        cJSON_AddNumberToObject(thread_obj, "time_ms", time_ms);
         
         char cpu_str[16];
         snprintf(cpu_str, sizeof(cpu_str), "%.3f", cpu_pct / 100.0);
@@ -251,9 +268,18 @@ void output_json_rtos_threads(OutputConfig *config, struct rtosState *rtos, uint
     
     if (window_time_us > 0 && has_idle_concept)
     {
-        uint64_t temp = (uint64_t)active_accum_us * 10000ULL;
-        uint32_t cpu_usage_pct = (uint32_t)(temp / window_time_us);
-        
+        uint32_t cpu_usage_pct;
+        if (total_cycles > 0)
+        {
+            cpu_usage_pct = (uint32_t)((active_cycles * 10000ULL) / total_cycles);
+        }
+        else
+        {
+            uint64_t temp = (uint64_t)active_accum_us * 10000ULL;
+            cpu_usage_pct = (uint32_t)(temp / window_time_us);
+        }
+        if (cpu_usage_pct > 10000) cpu_usage_pct = 10000;
+
         cJSON_AddNumberToObject(root, "interval_ms", window_time_us / 1000);
         
         char cpu_usage_str[16];

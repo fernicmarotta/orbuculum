@@ -214,6 +214,12 @@ static int zephyr_read_thread_info(struct rtosState *rtos,
 
     detect_entry_function(thread, symbols, priv, tcb_addr);
 
+    if (rtos_name_is_unknown(thread->name) && thread->entry_func == 0)
+    {
+        genericsReport(V_DEBUG, "Zephyr: Rejecting TCB=0x%08X - all reads failed" EOL, tcb_addr);
+        return -1;
+    }
+
     bool reused = check_thread_reuse(thread, old_name_hash, old_func_hash, tcb_addr);
 
     return reused ? 1 : 0;

@@ -220,17 +220,20 @@ uint32_t telnet_read_memory_word(uint32_t address)
         
         if (strstr(line, "mdw"))
             continue;
-        
-        uint32_t addr, val;
-        if (sscanf(line, "0x%x: %x", &addr, &val) == 2) {
-            if (addr == address) {
-                value = val;
-                found = 1;
-                break;
+
+        char *hex_ptr = strstr(line, "0x");
+        if (hex_ptr) {
+            uint32_t addr, val;
+            if (sscanf(hex_ptr, "0x%x: %x", &addr, &val) == 2) {
+                if (addr == address) {
+                    value = val;
+                    found = 1;
+                    break;
+                }
             }
         }
-        
-        if (strstr(line, "> "))
+
+        if (strstr(line, "> ") && !hex_ptr)
             break;
     }
     
@@ -345,7 +348,8 @@ void telnet_configure_dwt(uint32_t watch_address) {
     snprintf(cmd, sizeof(cmd), "rtos_dwt_config 0x%08X\n", watch_address);
     send(_telnetSocket, cmd, strlen(cmd), 0);
     _readLine(_telnetSocket, response, sizeof(response), 500);
-    
+    _drainSocket(_telnetSocket);
+
     genericsReport(V_INFO, "Configured DWT comparator 1 to watch 0x%08X\n", watch_address);
 }
 
