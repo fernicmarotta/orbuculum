@@ -367,6 +367,26 @@ void _handleDWTEvent( struct dwtMsg *m, struct ITMPacket *p )
     }
 }
 // ====================================================================================================
+void _handleSW( struct swMsg *m, struct ITMDecoder *i )
+{
+    assert( m->msgtype == MSG_SOFTWARE );
+
+    if ( m->srcAddr >= ITM_NUM_CHANNELS || !options.itm_channel_tags[m->srcAddr] )
+        return;
+
+    if ( !_r.rtos || !_r.rtos->output_config )
+        return;
+
+    ItmEventOutput event = {
+        .channel = m->srcAddr,
+        .tag_name = options.itm_channel_tags[m->srcAddr],
+        .value = m->value,
+        .len = m->len
+    };
+
+    output_itm_event( (OutputConfig *)_r.rtos->output_config, &event, _r.timeStamp );
+}
+// ====================================================================================================
 void _handleDataAccessWP( struct wptMsg *m, struct ITMDecoder *i )
 {
     genericsReport( V_DEBUG, "DWT WP: comp=%d data=0x%08X" EOL, m->comp, m->data );
@@ -551,7 +571,7 @@ void _itmPumpProcess( uint8_t c )
         /* MSG_RESERVED */        NULL,
         /* MSG_ERROR */           NULL,
         /* MSG_NONE */            NULL,
-        /* MSG_SOFTWARE */        NULL,
+        /* MSG_SOFTWARE */        ( handlers )_handleSW,
         /* MSG_NISYNC */          NULL,
         /* MSG_OSW */             NULL,
         /* MSG_DATA_ACCESS_WP */  ( handlers )_handleDataAccessWP,
