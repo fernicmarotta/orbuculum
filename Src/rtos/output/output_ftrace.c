@@ -34,7 +34,7 @@ void output_ftrace_start_frame(OutputConfig *config, IntervalOutput *interval)
     }
 }
 
-void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us)
+void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us, char prev_state)
 {
     genericsReport(V_DEBUG, "ftrace: thread_switch called - conf...ile=%p, next=%p\n", config, config ? config->file : NULL, next);
 
@@ -102,7 +102,7 @@ void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, 
     fprintf(config->file,
             "%16s-%u [%03d] .... %12.6f: sched_switch: prev_comm=%s prev_pid=%u prev_prio=%d prev_state=%c ==> next_comm=%s next_pid=%u next_prio=%d\n",
             p_name, p_pid, cpu_id, t,
-            p_name, p_pid, p_prio, 'S',
+            p_name, p_pid, p_prio, prev_state,
             n_name, n_pid, n_prio);
 
     fflush(config->file);

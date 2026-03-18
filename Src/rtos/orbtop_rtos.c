@@ -96,6 +96,7 @@ static bool terminal_modified = false;
 static OutputConfig *_outputConfig = NULL;
 
 static void _closeTelnet( void );
+static void _configureObjectWatch(struct SymbolSet *symbols);
 
 static void _initOutput( void )
 {
@@ -193,6 +194,7 @@ static void _reinitializeRTOS( void )
                 genericsReport( V_DEBUG, "Restored output_config to RTOS after reinit" EOL );
             }
             genericsReport( V_INFO, "RTOS reconnected and verified for %s" EOL, _r.rtos->name );
+            _configureObjectWatch(_r.s);
             return;
         }
     }
@@ -391,19 +393,23 @@ void _handleDataAccessWP( struct wptMsg *m, struct ITMDecoder *i )
 {
     genericsReport( V_DEBUG, "DWT WP: comp=%d data=0x%08X" EOL, m->comp, m->data );
     
-    /* Handle RTX5 thread switch watchpoint */
+    /* Handle DWT watchpoint events */
     if ( _r.rtos && _r.rtos->enabled )
     {
-        /* Call RTOS handler with watchpoint data - accept both comp 0 and 1 */
         if ( m->comp == 0 || m->comp == 1 )
         {
-            genericsReport( V_DEBUG, "DWT WP: comp=%d data=0x%08X, _r.timeStamp=%llu" EOL, 
+            genericsReport( V_DEBUG, "DWT WP: comp=%d data=0x%08X, _r.timeStamp=%llu" EOL,
                           m->comp, m->data, _r.timeStamp );
-            /* Use _r.timeStamp which is the accumulated ITM timestamp */
             rtosHandleDWTMatchWithTimestamp(_r.rtos, _r.s, m->comp, 0, m->data, _r.timeStamp, options.telnetPort);
+        }
+        else if ( m->comp == 2 )
+        {
+            genericsReport( V_DEBUG, "DWT WP comp2 (object): data=0x%08X" EOL, m->data );
+            rtosHandleObjectEvent(_r.rtos, _r.s, m->data, _r.timeStamp);
         }
     }
 }
+// ====================================================================================================
 static void _closeTelnet( void )
 {
     telnet_disconnect();
@@ -414,6 +420,39 @@ int options_udpPort = 0;
 void rtosConfigureDWT(uint32_t watch_address)
 {
     telnet_configure_dwt(watch_address);
+}
+
+static void _configureObjectWatch(struct SymbolSet *symbols)
+{
+    if (!options.objWatchSymbol || !symbols || !symbols->elfFile)
+        return;
+
+    char cmd[512];
+    FILE *fp;
+    char line[256];
+    uint32_t addr = 0;
+
+    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep '%s$'",
+             symbols->elfFile, options.objWatchSymbol);
+    fp = popen(cmd, "r");
+    if (fp && fgets(line, sizeof(line), fp))
+    {
+        addr = strtoul(line, NULL, 16);
+    }
+    if (fp)
+    {
+        pclose(fp);
+    }
+
+    if (!addr)
+    {
+        genericsReport(V_ERROR, "Symbol '%s' not found in ELF" EOL, options.objWatchSymbol);
+        return;
+    }
+
+    genericsReport(V_INFO, "Configuring DWT comp2 for object watch: %s at 0x%08X" EOL,
+                  options.objWatchSymbol, addr);
+    telnet_configure_dwt2(addr);
 }
 
 void rtosClearMemoryCacheForTCB(uint32_t tcb_addr)
@@ -738,11 +777,14 @@ int main( int argc, char *argv[] )
         if ( _r.rtos )
         {
             genericsReport( V_INFO, "RTOS tracking enabled for %s" EOL, _r.rtos->name );
+
+            /* Configure object watch DWT if -w option specified */
+            _configureObjectWatch(_r.s);
         }
-        
+
         if ( _r.rtos )
         {
-            
+
             /* Set up ftrace output if requested */
             if ( options.ftrace )
             {

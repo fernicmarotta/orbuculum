@@ -36,6 +36,7 @@ typedef struct {
     uint32_t cpuFreq;
     bool cpuFreqSpecified;
     char *itm_channel_tags[ITM_NUM_CHANNELS];
+    char *objWatchSymbol;
 } ProgramOptions;
 
 int options_parse(int argc, char *argv[], ProgramOptions *opts);

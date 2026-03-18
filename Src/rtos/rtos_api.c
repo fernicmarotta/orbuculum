@@ -190,17 +190,23 @@ struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *reque
 void rtosFree(struct rtosState *rtos)
 {
     if (!rtos) return;
-    
+
     struct rtosThread *thread, *tmp;
     HASH_ITER(hh, rtos->threads, thread, tmp) {
         HASH_DEL(rtos->threads, thread);
         free(thread);
     }
-    
+
+    struct rtosObject *obj, *obj_tmp;
+    HASH_ITER(hh, rtos->objects, obj, obj_tmp) {
+        HASH_DEL(rtos->objects, obj);
+        free(obj);
+    }
+
     if (rtos->ops && rtos->ops->cleanup) {
         rtos->ops->cleanup(rtos);
     }
-    
+
     free(rtos);
 }
 
@@ -358,6 +364,79 @@ static void account_prev_thread_time_us(struct rtosState *rtos, uint64_t current
 }
 
 
+static struct rtosObject *find_or_create_object(struct rtosState *rtos, uint32_t cb_addr)
+{
+    struct rtosObject *obj;
+    HASH_FIND_INT(rtos->objects, &cb_addr, obj);
+
+    if (obj)
+        return obj;
+
+    obj = calloc(1, sizeof(struct rtosObject));
+    if (!obj)
+        return NULL;
+
+    obj->cb_addr = cb_addr;
+
+    if (rtos->ops && rtos->ops->read_object_info)
+    {
+        if (rtos->ops->read_object_info(rtos, obj, cb_addr) < 0)
+        {
+            free(obj);
+            return NULL;
+        }
+    }
+    else
+    {
+        obj->type = RTOS_OBJ_UNKNOWN;
+        obj->type_prefix = "obj";
+        snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+    }
+
+    HASH_ADD_INT(rtos->objects, cb_addr, obj);
+    return obj;
+}
+
+
+void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
+                           uint32_t value, uint64_t timestamp)
+{
+    if (!rtos || !rtos->enabled)
+        return;
+
+    if (value == 0)
+    {
+        rtos->pending_prev_state = 'S';
+        rtos->pending_object_addr = 0;
+        return;
+    }
+
+    struct rtosObject *obj = find_or_create_object(rtos, value);
+    if (!obj)
+        return;
+
+    obj->event_count++;
+    rtos->pending_prev_state = 'D';
+    rtos->pending_object_addr = value;
+
+    if (rtos->output_config)
+    {
+        ItmEventOutput event = {
+            .channel = 0,
+            .tag_name = NULL,
+            .value = obj->event_count,
+            .len = 4
+        };
+
+        char tag[128];
+        snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
+        event.tag_name = tag;
+
+        output_itm_event((OutputConfig *)rtos->output_config, &event, timestamp);
+    }
+}
+
+
 static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thread,
                                    uint64_t timestamp)
 {
@@ -371,9 +450,13 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
     if (rtos->current_thread)
         HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev);
 
-    if (rtos->output_config)
-        output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, timestamp);
+    char prev_state = rtos->pending_prev_state ? rtos->pending_prev_state : 'R';
 
+    if (rtos->output_config)
+        output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, timestamp, prev_state);
+
+    rtos->pending_prev_state = 0;
+    rtos->pending_object_addr = 0;
     rtos->current_thread = thread->tcb_addr;
 }
 

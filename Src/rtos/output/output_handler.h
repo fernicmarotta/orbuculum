@@ -79,7 +79,7 @@ typedef struct {
 } ItmEventOutput;
 
 struct rtosThread;
-void output_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us);
+void output_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us, char prev_state);
 void output_itm_event(OutputConfig *config, ItmEventOutput *event, uint64_t timestamp);
 
 void output_clear_screen(OutputConfig *config);

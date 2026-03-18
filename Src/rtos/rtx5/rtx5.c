@@ -118,6 +118,78 @@ struct rtx5_private
 };
 
 
+static const char *rtx5_object_type_prefix(uint8_t id)
+{
+    switch (id)
+    {
+        case RTX5_ID_MUTEX:        return "mutex";
+        case RTX5_ID_SEMAPHORE:    return "sem";
+        case RTX5_ID_EVENTFLAGS:   return "evflags";
+        case RTX5_ID_MESSAGEQUEUE: return "msgq";
+        case RTX5_ID_MEMPOOL:      return "mempool";
+        default:                   return "obj";
+    }
+}
+
+static enum rtosObjectType rtx5_id_to_object_type(uint8_t id)
+{
+    switch (id)
+    {
+        case RTX5_ID_MUTEX:        return RTOS_OBJ_MUTEX;
+        case RTX5_ID_SEMAPHORE:    return RTOS_OBJ_SEMAPHORE;
+        case RTX5_ID_EVENTFLAGS:   return RTOS_OBJ_EVENT_FLAGS;
+        case RTX5_ID_MESSAGEQUEUE: return RTOS_OBJ_MESSAGE_QUEUE;
+        case RTX5_ID_MEMPOOL:      return RTOS_OBJ_MEMORY_POOL;
+        default:                   return RTOS_OBJ_UNKNOWN;
+    }
+}
+
+static int rtx5_read_object_info(struct rtosState *rtos, struct rtosObject *obj, uint32_t cb_addr)
+{
+    if (!rtos || !obj || !cb_addr)
+        return -1;
+
+    struct rtx5_private *priv = (struct rtx5_private *)rtos->priv;
+
+    uint32_t id_word = rtosReadMemoryWord(cb_addr + priv->id_offset);
+    uint8_t object_id = (uint8_t)(id_word & 0xFF);
+
+    obj->type = rtx5_id_to_object_type(object_id);
+    obj->type_prefix = rtx5_object_type_prefix(object_id);
+
+    if (obj->type == RTOS_OBJ_UNKNOWN)
+    {
+        genericsReport(V_WARN, "RTX5: Unknown object ID 0x%02X at CB=0x%08X\n", object_id, cb_addr);
+        snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+        return 0;
+    }
+
+    uint32_t name_ptr = rtosReadMemoryWord(cb_addr + priv->name_offset);
+    if (name_ptr && name_ptr != 0xFFFFFFFF)
+    {
+        char name_buf[64] = {0};
+        char *name_str = rtosReadMemoryString(name_ptr, name_buf, sizeof(name_buf));
+        if (name_str && name_buf[0] != 0)
+        {
+            strncpy(obj->name, name_buf, sizeof(obj->name) - 1);
+            obj->name[sizeof(obj->name) - 1] = '\0';
+        }
+        else
+        {
+            snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+        }
+    }
+    else
+    {
+        snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+    }
+
+    genericsReport(V_INFO, "RTX5 Object: CB=0x%08X, Type=%s, Name=%s\n",
+                  cb_addr, obj->type_prefix, obj->name);
+    return 0;
+}
+
+
 static int rtx5_read_thread_info(struct rtosState *rtos,
                                  struct SymbolSet *symbols,
                                  struct rtosThread *thread,
@@ -455,7 +527,8 @@ static const struct rtosOps rtx5_ops =
     .get_state_name = rtx5_get_state_name,
     .is_idle_thread = rtx5_is_idle_thread,
     .verify_target_match = rtx5_verify_target_match,
-    .get_watchpoint_addr = rtx5_get_watchpoint_addr
+    .get_watchpoint_addr = rtx5_get_watchpoint_addr,
+    .read_object_info = rtx5_read_object_info
 };
 
 void rtosRegisterRTX5(void)

@@ -53,6 +53,7 @@ void options_print_help(const char *progName) {
     fprintf(stdout, "  -s, --server:        <Server>:<Port> (default localhost:%d)\n", OFCLIENT_SERVER_PORT);
     fprintf(stdout, "  -T, --rtos:          <type> RTOS type (rtx5, freertos, zephyr)\n");
     fprintf(stdout, "  -S, --rtos-sort:     Sort: cpu|maxcpu|tcb|name|func|priority|switches\n");
+    fprintf(stdout, "  -w, --watch-object:  <symbol> Watch variable for RTOS object DWT tracing\n");
     fprintf(stdout, "  -W, --telnet-port:   <port> Telnet port for OpenOCD (default 4444)\n");
     fprintf(stdout, "  -t, --tag:           <stream> OFLOW tag (default 1)\n");
     fprintf(stdout, "  -v, --verbose:       <level> Verbose 0(errors)..3(debug)\n");
@@ -89,6 +90,7 @@ static struct option longOptions[] = {
     {"server", required_argument, NULL, 's'},
     {"rtos", required_argument, NULL, 'T'},
     {"rtos-sort", required_argument, NULL, 'S'},
+    {"watch-object", required_argument, NULL, 'w'},
     {"telnet-port", required_argument, NULL, 'W'},
     {"tag", required_argument, NULL, 't'},
     {"verbose", required_argument, NULL, 'v'},
@@ -102,7 +104,7 @@ int options_parse(int argc, char *argv[], ProgramOptions *opts) {
     
     memcpy(opts, &defaultOptions, sizeof(ProgramOptions));
     
-    while ((c = getopt_long(argc, argv, "c:De:EF:f:I:j:K:MnO:p:P:s:S:T:W:t:v:hV",
+    while ((c = getopt_long(argc, argv, "c:De:EF:f:I:j:K:MnO:p:P:s:S:T:w:W:t:v:hV",
                             longOptions, NULL)) != -1) {
         switch (c) {
             case 'c':
@@ -236,6 +238,9 @@ int options_parse(int argc, char *argv[], ProgramOptions *opts) {
                 break;
             case 'T':
                 opts->rtos = optarg;
+                break;
+            case 'w':
+                opts->objWatchSymbol = optarg;
                 break;
             case 'W':
                 opts->telnetPort = atoi(optarg);
