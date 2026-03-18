@@ -43,13 +43,6 @@ static const struct rtosRegistry *find_rtos_by_name(const char *name)
 }
 
 
-/* Hash for unresolved function addresses */
-struct unresolvedFunc {
-    uint32_t addr;
-    UT_hash_handle hh;
-};
-static struct unresolvedFunc *unresolvedFuncs = NULL;
-
 static struct rtosThread *find_or_create_thread(struct rtosState *rtos, struct SymbolSet *symbols,
                                                  uint32_t tcb_addr, int telnet_port);
 
