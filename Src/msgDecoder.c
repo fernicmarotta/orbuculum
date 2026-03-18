@@ -136,12 +136,12 @@ static bool _handleHW( struct ITMPacket *packet, struct msg *decoded )
 
         // --------------
         default:
-            /* Special case for srcAddr 0x13 from DWT comparator 1 */
-            if ( packet->srcAddr == 0x13 )
+            /* Data value WRITE from any DWT comparator: srcAddr = 0b10_CC_1 */
+            if ( ( packet->srcAddr & 0x19 ) == 0x11 )
             {
                 wasDecoded = _handleDataAccessWP( packet, ( struct wptMsg * )decoded );
             }
-            else if ( ( ( packet->srcAddr & 0x19 ) == 0x10 ) || ( ( packet->srcAddr & 0x19 ) == 0x11 ) )
+            else if ( ( packet->srcAddr & 0x19 ) == 0x10 )
             {
                 wasDecoded = _handleDataRWWP( packet, ( struct watchMsg * )decoded );
             }
