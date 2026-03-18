@@ -419,18 +419,18 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     rtos->pending_prev_state = 'D';
     rtos->pending_object_addr = value;
 
+    /* Emit pulse rising edge (1) — falling edge (0) emitted at context switch */
     if (rtos->output_config)
     {
-        ItmEventOutput event = {
-            .channel = 0,
-            .tag_name = NULL,
-            .value = obj->event_count,
-            .len = 4
-        };
-
         char tag[128];
         snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
-        event.tag_name = tag;
+
+        ItmEventOutput event = {
+            .channel = 0,
+            .tag_name = tag,
+            .value = 1,
+            .len = 4
+        };
 
         output_itm_event((OutputConfig *)rtos->output_config, &event, timestamp);
     }
@@ -451,6 +451,28 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
         HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev);
 
     char prev_state = rtos->pending_prev_state ? rtos->pending_prev_state : 'R';
+
+    /* Emit pulse falling edge (0) for the object that caused the block */
+    if (rtos->pending_object_addr && rtos->output_config)
+    {
+        struct rtosObject *obj;
+        HASH_FIND_INT(rtos->objects, &rtos->pending_object_addr, obj);
+
+        if (obj)
+        {
+            char tag[128];
+            snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
+
+            ItmEventOutput event = {
+                .channel = 0,
+                .tag_name = tag,
+                .value = 0,
+                .len = 4
+            };
+
+            output_itm_event((OutputConfig *)rtos->output_config, &event, timestamp);
+        }
+    }
 
     if (rtos->output_config)
         output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, timestamp, prev_state);
