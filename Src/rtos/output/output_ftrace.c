@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+/* Buffer for composite thread name "name|entry_func" in ftrace output */
+#define FTRACE_THREAD_NAME_LEN (RTOS_THREAD_NAME_MAX_LEN * 2)
+
 static uint64_t base_timestamp_us = 0;
 static bool first_switch = true;
 static int cpu_id = 0;
@@ -83,8 +86,8 @@ void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, 
     int n_prio = next->priority;
     unsigned n_pid = (unsigned)(uint32_t)n_tcb;
 
-    char p_name[128];
-    char n_name[128];
+    char p_name[FTRACE_THREAD_NAME_LEN];
+    char n_name[FTRACE_THREAD_NAME_LEN];
 
     if (p_entry && p_entry[0])
         snprintf(p_name, sizeof(p_name), "%s|%s", p_base, p_entry);
