@@ -110,6 +110,25 @@ void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, 
 
 
 
+void output_ftrace_itm_event(OutputConfig *config, ItmEventOutput *event, uint64_t timestamp)
+{
+    if (!config || !config->file || !event || !event->tag_name)
+        return;
+
+    /* Skip if no sched_switch header written yet */
+    if (first_switch)
+        return;
+
+    double t = (timestamp - base_timestamp_us) / 1000000.0;
+
+    fprintf(config->file,
+            "%16s-0 [%03d] .... %12.6f: tracing_mark_write: C|0|%s|%u\n",
+            "<...>", cpu_id, t,
+            event->tag_name, event->value);
+
+    fflush(config->file);
+}
+
 void output_ftrace_profile_entry(OutputConfig *config, ProfileOutput *entry)
 {
 }
