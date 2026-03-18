@@ -4,10 +4,12 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-enum Protocol { 
-    PROT_OFLOW, 
-    PROT_ITM, 
-    PROT_UNKNOWN 
+#define ITM_NUM_CHANNELS 32
+
+enum Protocol {
+    PROT_OFLOW,
+    PROT_ITM,
+    PROT_UNKNOWN
 };
 
 typedef struct {
@@ -33,6 +35,7 @@ typedef struct {
     int udpPort;
     uint32_t cpuFreq;
     bool cpuFreqSpecified;
+    char *itm_channel_tags[ITM_NUM_CHANNELS];
 } ProgramOptions;
 
 int options_parse(int argc, char *argv[], ProgramOptions *opts);
