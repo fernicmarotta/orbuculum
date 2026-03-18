@@ -35,6 +35,8 @@ void options_print_help(const char *progName) {
     fprintf(stdout, "\nRequired:\n");
     fprintf(stdout, "  -e, --elf-file:      <ElfFile> ELF file for symbols\n");
     fprintf(stdout, "\nOptional:\n");
+    fprintf(stdout, "  -c, --itm-channel:   <ch>:<tag> | <start-end>:<prefix> | all:<prefix>\n");
+    fprintf(stdout, "                       e.g. -c 2:sensor  -c 1-31:ch  -c all:ch\n");
     fprintf(stdout, "  -D, --no-demangle:   Switch off C++ symbol demangling\n");
     fprintf(stdout, "  -E, --exceptions:    Include exceptions in output\n");
     fprintf(stdout, "  -F, --cpu-freq:      <Hz> CPU frequency for time calculations (omit to show NA)\n");
@@ -69,6 +71,7 @@ void options_print_help(const char *progName) {
 }
 
 static struct option longOptions[] = {
+    {"itm-channel", required_argument, NULL, 'c'},
     {"no-demangle", no_argument, NULL, 'D'},
     {"elf-file", required_argument, NULL, 'e'},
     {"exceptions", no_argument, NULL, 'E'},
@@ -99,9 +102,63 @@ int options_parse(int argc, char *argv[], ProgramOptions *opts) {
     
     memcpy(opts, &defaultOptions, sizeof(ProgramOptions));
     
-    while ((c = getopt_long(argc, argv, "De:EF:f:I:j:K:MnO:p:P:s:S:T:W:t:v:hV", 
+    while ((c = getopt_long(argc, argv, "c:De:EF:f:I:j:K:MnO:p:P:s:S:T:W:t:v:hV",
                             longOptions, NULL)) != -1) {
         switch (c) {
+            case 'c':
+            {
+                char *sep = strchr(optarg, ':');
+                if (!sep || sep == optarg)
+                {
+                    fprintf(stderr, "Error: -c format is <channel>:<tag>, <start-end>:<prefix>, or all:<prefix>\n");
+                    return -1;
+                }
+                *sep = '\0';
+                const char *tag = sep + 1;
+
+                if (strcasecmp(optarg, "all") == 0)
+                {
+                    /* -c all:prefix → channels 1-31 with prefix1..prefix31 */
+                    for (int i = 1; i < ITM_NUM_CHANNELS; i++)
+                    {
+                        char *buf = malloc(strlen(tag) + 4);
+                        sprintf(buf, "%s%d", tag, i);
+                        opts->itm_channel_tags[i] = buf;
+                    }
+                }
+                else if (strchr(optarg, '-'))
+                {
+                    /* -c start-end:prefix → range with prefix+N */
+                    int start, end;
+                    if (sscanf(optarg, "%d-%d", &start, &end) != 2 ||
+                        start < 0 || end >= ITM_NUM_CHANNELS || start > end)
+                    {
+                        fprintf(stderr, "Error: Invalid range %s (0-%d)\n", optarg, ITM_NUM_CHANNELS - 1);
+                        *sep = ':';
+                        return -1;
+                    }
+                    for (int i = start; i <= end; i++)
+                    {
+                        char *buf = malloc(strlen(tag) + 4);
+                        sprintf(buf, "%s%d", tag, i);
+                        opts->itm_channel_tags[i] = buf;
+                    }
+                }
+                else
+                {
+                    /* -c N:tag → single channel */
+                    int chan = atoi(optarg);
+                    if (chan < 0 || chan >= ITM_NUM_CHANNELS)
+                    {
+                        fprintf(stderr, "Error: Channel %d out of range (0-%d)\n", chan, ITM_NUM_CHANNELS - 1);
+                        *sep = ':';
+                        return -1;
+                    }
+                    opts->itm_channel_tags[chan] = (char *)tag;
+                }
+                *sep = ':';
+                break;
+            }
             case 'D':
                 opts->demangle = false;
                 break;
