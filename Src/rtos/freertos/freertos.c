@@ -660,11 +660,11 @@ static int freertos_read_object_info(struct rtosState *rtos, struct rtosObject *
     if (!rtos || !obj || !cb_addr)
         return -1;
 
-    /* Queue_t.pcHead (offset 0) is a pointer to the queue storage area —
-     * always non-null and word-aligned for any valid queue.
-     * A failed read (unmapped memory) returns 0 — reject early. */
+    /* Queue_t.pcHead (offset 0): for queues/semaphores it points to the
+     * storage area (non-null, word-aligned).  For mutexes, FreeRTOS sets
+     * pcHead = NULL intentionally (prvInitialiseMutex).  So NULL is valid. */
     uint32_t pcHead = rtosReadMemoryWord(cb_addr);
-    if (!pcHead || pcHead == 0xFFFFFFFF || (pcHead & 3))
+    if (pcHead == 0xFFFFFFFF || (pcHead && (pcHead & 3)))
         return -1;
 
     struct freertos_private *priv = (struct freertos_private *)rtos->priv;

@@ -141,11 +141,30 @@ proc rtos_dwt2_config {addr} {
 }
 ```
 
-### 5. Run orbtop-rtos
+### 5. Ejecutar orbtop-rtos
 
 ```bash
-orbtop-rtos -e firmware.elf -T <telnet_port> -w rtos_obj_trace -f trace.ftrace
+./build/orbtop-rtos \
+    -e firmware.elf \
+    -T freertos \
+    -w rtos_obj_trace \
+    -s localhost:42995 \
+    -W 43109 \
+    -F 480000000 \
+    -p ITM \
+    -K trace.ftrace
 ```
+
+| Opción | Descripción |
+|--------|-------------|
+| `-e`   | ELF del firmware (para DWARF + símbolos) |
+| `-T`   | Tipo de RTOS (`freertos`, `rtx5`, `zephyr`) |
+| `-w`   | Variable watchpoint para object tracking (DWT comp2) |
+| `-s`   | Servidor orbuculum (host:puerto) |
+| `-W`   | Puerto telnet de OpenOCD |
+| `-F`   | Frecuencia del CPU en Hz |
+| `-p`   | Protocolo de trace (`ITM` o `ETM`) |
+| `-K`   | Fichero de salida ftrace |
 
 ## How It Works Internally
 
@@ -168,11 +187,12 @@ When a DWT comp2 event arrives with a `Queue_t` address:
 
 ### prev_state mapping
 
-| Value written to `rtos_obj_trace` | Meaning           | ftrace `prev_state` |
-|----------------------------------|-------------------|---------------------|
-| Queue_t address (word-aligned)    | Blocked on object | `D`                 |
-| `0`                               | Delay / sleep     | `S`                 |
-| `0xFFFFFFFF`                      | Invalid (ignored) | —                   |
+| Value written to `rtos_obj_trace` | Meaning              | ftrace `prev_state` |
+|----------------------------------|----------------------|---------------------|
+| Queue_t address (word-aligned)    | Blocked on object    | `D`                 |
+| EventGroup_t address \| 1         | Blocked on evtflags  | `D`                 |
+| `0`                               | Delay / sleep        | `S`                 |
+| `0xFFFFFFFF`                      | Invalid (ignored)    | —                   |
 
 ## Limitations
 
