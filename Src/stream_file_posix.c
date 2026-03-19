@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #include "generics.h"
 
@@ -27,6 +28,11 @@ static enum ReceiveResult _posixFileStreamReceive( struct Stream *stream, void *
 
     if ( r < 0 )
     {
+        if ( errno == EINTR )
+        {
+            return RECEIVE_RESULT_TIMEOUT;
+        }
+
         return RECEIVE_RESULT_ERROR;
     }
 
