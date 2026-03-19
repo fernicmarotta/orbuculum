@@ -355,7 +355,8 @@ void _itmPumpProcess( struct RunTime *r, char c )
         /* MSG_PC_SAMPLE */       NULL,
         /* MSG_DWT_EVENT */       NULL,
         /* MSG_EXCEPTION */       NULL,
-        /* MSG_TS */              NULL
+        /* MSG_TS */              NULL,
+        /* MSG_DATA_PC_VALUE */   NULL
     };
 
     switch ( ITMPump( &r->i, c ) )

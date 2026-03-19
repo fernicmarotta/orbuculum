@@ -98,6 +98,17 @@ static bool _handleDataAccessWP( struct ITMPacket *packet, struct wptMsg *decode
     return true;
 }
 // ====================================================================================================
+static bool _handleDataPCValue( struct ITMPacket *packet, struct wptMsg *decoded )
+
+/* DWT data trace PC value packet (srcAddr = 0b01_CC_0): PC at time of data access */
+
+{
+    decoded->msgtype = MSG_DATA_PC_VALUE;
+    decoded->comp = ( packet->srcAddr >> 1 ) & 0x3;
+    decoded->data = ( packet->d[0] ) | ( ( packet->d[1] ) << 8 ) | ( ( packet->d[2] ) << 16 ) | ( ( packet->d[3] ) << 24 );
+    return true;
+}
+// ====================================================================================================
 static bool _handleDataOffsetWP(  struct ITMPacket *packet, struct oswMsg *decoded )
 
 /* We got an alert due to an offset write event */
@@ -147,7 +158,7 @@ static bool _handleHW( struct ITMPacket *packet, struct msg *decoded )
             }
             else if ( ( packet->srcAddr & 0x19 ) == 0x08 )
             {
-                wasDecoded = _handleDataAccessWP( packet, ( struct wptMsg * )decoded );
+                wasDecoded = _handleDataPCValue( packet, ( struct wptMsg * )decoded );
             }
             else if ( ( packet->srcAddr & 0x19 ) == 0x09 )
             {

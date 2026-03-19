@@ -27,7 +27,7 @@ enum MSGType
     MSG_EXCEPTION,
     MSG_TS,
 
-    /* Add new message types here */
+    MSG_DATA_PC_VALUE,   /* DWT data trace PC value (srcAddr = 0b01_CC_0) */
 
     MSG_NUM_MSGS
 };
