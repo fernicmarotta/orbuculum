@@ -117,12 +117,25 @@ static void detect_entry_function(struct rtosThread *thread,
     if (!priv || !priv->prvTaskExitError_addr || !priv->has_end_of_stack)
         return;
 
+    /* pxTopOfStack == 0 means the TCB read failed — skip */
+    if (!pxTopOfStack || pxTopOfStack == 0xFFFFFFFF)
+        return;
+
     uint32_t pxEndOfStack = rtosReadMemoryWord(tcb_addr + priv->end_of_stack_offset);
-    
+
     if (!pxEndOfStack || pxEndOfStack == 0xFFFFFFFF || pxEndOfStack <= pxTopOfStack)
         return;
 
-    uint32_t scan_limit = (pxEndOfStack > FREERTOS_MAX_STACK_SCAN_WORDS * 4) 
+    /* Sanity check: stack size must be reasonable (< 64KB) */
+    uint32_t stack_size = pxEndOfStack - pxTopOfStack;
+    if (stack_size > 0x10000)
+    {
+        genericsReport(V_DEBUG, "FreeRTOS: Stack range too large (0x%X), skipping scan for TCB=0x%08X" EOL,
+                      stack_size, tcb_addr);
+        return;
+    }
+
+    uint32_t scan_limit = (pxEndOfStack > FREERTOS_MAX_STACK_SCAN_WORDS * 4)
         ? pxEndOfStack - (FREERTOS_MAX_STACK_SCAN_WORDS * 4)
         : pxTopOfStack;
     if (scan_limit < pxTopOfStack)
@@ -130,10 +143,24 @@ static void detect_entry_function(struct rtosThread *thread,
 
     /* Scan from below pxEndOfStack (it's usually fill pattern at the top) */
     uint32_t scan_start = pxEndOfStack - 4;
+    int consecutive_zeros = 0;
 
     for (uint32_t addr = scan_start; addr >= scan_limit && addr >= 4; addr -= 4)
     {
         uint32_t val = rtosReadMemoryWord(addr);
+
+        /* Abort if reads keep failing (non-existent memory returns 0) */
+        if (val == 0)
+        {
+            if (++consecutive_zeros >= 3)
+            {
+                genericsReport(V_DEBUG, "FreeRTOS: Stack scan aborted at 0x%08X (read failures)" EOL, addr);
+                return;
+            }
+            continue;
+        }
+        consecutive_zeros = 0;
+
         if ((val & ~1) == priv->prvTaskExitError_addr)
         {
             /* First try: original stack layout - entry PC is at addr+4 (above prvTaskExitError) */
@@ -239,12 +266,24 @@ static int freertos_read_thread_info(struct rtosState *rtos,
     uint32_t old_name_hash = thread->name_hash;
     uint32_t old_func_hash = thread->func_hash;
 
-    read_thread_name(thread, tcb_addr, name_offset, max_name_len);
-    read_thread_priority(thread, tcb_addr, priority_offset);
-
+    /* pxTopOfStack is the first field in the TCB (offset 0).  It is a
+     * saved stack pointer — always non-null and word-aligned for any
+     * valid task.  A failed memory read returns 0; a non-TCB address
+     * in flash will typically yield an odd value.  Either way we can
+     * reject early with a single read. */
     uint32_t pxTopOfStack = rtosReadMemoryWord(tcb_addr + FREERTOS_TCB_TOP_OF_STACK_OFFSET);
+    if (!pxTopOfStack || pxTopOfStack == 0xFFFFFFFF || (pxTopOfStack & 3))
+        return -1;
+
+    bool name_valid = read_thread_name(thread, tcb_addr, name_offset, max_name_len);
+    read_thread_priority(thread, tcb_addr, priority_offset);
     detect_entry_function(thread, symbols, priv, tcb_addr, pxTopOfStack);
     apply_known_task_names(thread);
+
+    /* Reject if neither name nor entry function could be resolved —
+     * matches the approach used by RTX5 and Zephyr plugins. */
+    if (!name_valid && !thread->entry_func)
+        return -1;
 
     bool reused = check_thread_reuse(thread, old_name_hash, old_func_hash, tcb_addr);
 
