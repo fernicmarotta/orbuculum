@@ -129,6 +129,22 @@ void output_ftrace_itm_event(OutputConfig *config, ItmEventOutput *event, uint64
     fflush(config->file);
 }
 
+void output_ftrace_object_block(OutputConfig *config, uint32_t thread_pid,
+                                const char *thread_name, const char *object_tag,
+                                bool begin, uint64_t timestamp)
+{
+    if (!config || !config->file || first_switch || !object_tag)
+        return;
+
+    double t = (timestamp - base_timestamp_us) / 1000000.0;
+
+    fprintf(config->file,
+            "%16s-%u [%03d] .... %12.6f: tracing_mark_write: C|%u|%s|%u\n",
+            "rtos_obj", 1, cpu_id, t, 1, object_tag, begin ? 1 : 0);
+
+    fflush(config->file);
+}
+
 void output_ftrace_profile_entry(OutputConfig *config, ProfileOutput *entry)
 {
 }

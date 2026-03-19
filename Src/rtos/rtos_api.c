@@ -419,20 +419,28 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     rtos->pending_prev_state = 'D';
     rtos->pending_object_addr = value;
 
-    /* Emit pulse rising edge (1) — falling edge (0) emitted at context switch */
+    /* Emit B/E slice begin + counter rising edge on current thread */
     if (rtos->output_config)
     {
         char tag[128];
         snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
 
-        ItmEventOutput event = {
-            .channel = 0,
-            .tag_name = tag,
-            .value = 1,
-            .len = 4
-        };
-
-        output_itm_event((OutputConfig *)rtos->output_config, &event, timestamp);
+        struct rtosThread *curr = NULL;
+        HASH_FIND_INT(rtos->threads, &rtos->current_thread, curr);
+        char curr_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+        if (curr && curr->name[0])
+        {
+            if (curr->entry_func_name[0])
+                snprintf(curr_comm, sizeof(curr_comm), "%s|%s", curr->name, curr->entry_func_name);
+            else
+                snprintf(curr_comm, sizeof(curr_comm), "%s", curr->name);
+        }
+        else
+        {
+            curr_comm[0] = '\0';
+        }
+        output_object_block((OutputConfig *)rtos->output_config,
+                           (uint32_t)rtos->current_thread, curr_comm, tag, true, timestamp);
     }
 }
 
@@ -452,7 +460,7 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
 
     char prev_state = rtos->pending_prev_state ? rtos->pending_prev_state : 'R';
 
-    /* Emit pulse falling edge (0) for the object that caused the block */
+    /* Emit falling edge + slice end for the object that caused the block */
     if (rtos->pending_object_addr && rtos->output_config)
     {
         struct rtosObject *obj;
@@ -463,14 +471,22 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
             char tag[128];
             snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
 
-            ItmEventOutput event = {
-                .channel = 0,
-                .tag_name = tag,
-                .value = 0,
-                .len = 4
-            };
-
-            output_itm_event((OutputConfig *)rtos->output_config, &event, timestamp);
+            /* B/E slice end + counter falling edge on prev thread */
+            uint32_t prev_pid = prev ? (uint32_t)prev->tcb_addr : (uint32_t)rtos->current_thread;
+            char prev_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+            if (prev && prev->name[0])
+            {
+                if (prev->entry_func_name[0])
+                    snprintf(prev_comm, sizeof(prev_comm), "%s|%s", prev->name, prev->entry_func_name);
+                else
+                    snprintf(prev_comm, sizeof(prev_comm), "%s", prev->name);
+            }
+            else
+            {
+                prev_comm[0] = '\0';
+            }
+            output_object_block((OutputConfig *)rtos->output_config,
+                               prev_pid, prev_comm, tag, false, timestamp);
         }
     }
 
