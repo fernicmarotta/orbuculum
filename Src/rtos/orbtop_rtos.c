@@ -85,7 +85,7 @@ struct
     uint32_t dwt_event_acc[DWT_NUM_EVENTS];            /* Accumulator for DWT events */
 
     uint32_t interrupts;
-    bool ending;                                       /* Flag to exit */
+    volatile bool ending;                                /* Flag to exit */
 
     /* RTOS tracking state */
     struct rtosState *rtos;                            /* RTOS tracking state */
@@ -398,8 +398,6 @@ void _handleDataAccessWP( struct wptMsg *m, struct ITMDecoder *i )
     {
         if ( m->comp == 0 || m->comp == 1 )
         {
-            genericsReport( V_DEBUG, "DWT WP: comp=%d data=0x%08X, _r.timeStamp=%llu" EOL,
-                          m->comp, m->data, _r.timeStamp );
             rtosHandleDWTMatchWithTimestamp(_r.rtos, _r.s, m->comp, 0, m->data, _r.timeStamp, options.telnetPort);
         }
         else if ( m->comp == 2 )
@@ -778,9 +776,8 @@ int main( int argc, char *argv[] )
         if ( _r.rtos )
         {
             genericsReport( V_INFO, "RTOS tracking enabled for %s" EOL, _r.rtos->name );
-
-            /* Configure object watch DWT if -w option specified */
-            _configureObjectWatch(_r.s);
+            /* DWT comp2 for object watch is configured in _reinitializeRTOS()
+             * on the first stream connection — no need to do it here. */
         }
 
         if ( _r.rtos )
