@@ -411,6 +411,9 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
         return;
     }
 
+    if (value == 0xFFFFFFFF)
+        return;
+
     struct rtosObject *obj = find_or_create_object(rtos, value);
     if (!obj)
         return;
@@ -503,7 +506,7 @@ void rtosHandleDWTMatchWithTimestamp(struct rtosState *rtos, struct SymbolSet *s
                                      uint32_t comp_num, uint32_t address, uint32_t value,
                                      uint64_t itm_timestamp, int options_telnetPort)
 {
-    if (!rtos || !rtos->enabled)
+    if (!rtos || !rtos->enabled || value == 0 || value == 0xFFFFFFFF)
         return;
 
     uint32_t current_cyccnt = (uint32_t)(itm_timestamp & 0xFFFFFFFF);
@@ -524,7 +527,7 @@ void rtosHandleDWTMatch(struct rtosState *rtos, struct SymbolSet *symbols,
                         uint32_t comp_num, uint32_t address, uint32_t value,
                         int options_telnetPort)
 {
-    if (!rtos || !rtos->enabled)
+    if (!rtos || !rtos->enabled || value == 0 || value == 0xFFFFFFFF)
         return;
 
     uint64_t current_time_us = genericsTimestampuS();
