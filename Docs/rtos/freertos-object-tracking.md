@@ -40,13 +40,15 @@ in ftrace/Perfetto output with `prev_state=D` and a named counter track.
 FreeRTOS uses `Queue_t` internally for all synchronization primitives.
 The `ucQueueType` field identifies the object type:
 
-| ucQueueType | Object Type        | Prefix   | Example output          |
-|-------------|-------------------|----------|-------------------------|
-| 0           | Queue / Queue Set  | `queue`  | `queue:CmdQueue`        |
-| 1           | Mutex              | `mutex`  | `mutex:TestMutex`       |
-| 2           | Counting Semaphore | `sem`    | `sem:TestSem`           |
-| 3           | Binary Semaphore   | `sem`    | `sem:TestBSem`          |
-| 4           | Recursive Mutex    | `rmutex` | `rmutex:RecMutex`       |
+| ucQueueType | Object Type        | Prefix     | Example output          |
+|-------------|-------------------|------------|-------------------------|
+| 0           | Queue / Queue Set  | `queue`    | `queue:CmdQueue`        |
+| 1           | Mutex              | `mutex`    | `mutex:TestMutex`       |
+| 2           | Counting Semaphore | `sem`      | `sem:TestSem`           |
+| 3           | Binary Semaphore   | `sem`      | `sem:TestBSem`          |
+| 4           | Recursive Mutex    | `rmutex`   | `rmutex:RecMutex`       |
+| —           | Event Group        | `evtflags` | `evtflags:0x24001234`   |
+| —           | Delay              | —          | `prev_state=S`          |
 
 ### Requirements
 
@@ -71,16 +73,30 @@ vQueueAddToRegistry(myQueue, "TestQueue");
 /* ---- Orbuculum object tracking (DWT comp2) ---- */
 extern volatile uint32_t rtos_obj_trace;
 
-/* Queue-based objects: mutex, semaphore, queue */
+/* Queue-based objects: mutex, semaphore, queue (address is word-aligned, bit0=0) */
 #define traceBLOCKING_ON_QUEUE_RECEIVE(pxQueue) \
     do { rtos_obj_trace = (uint32_t)(pxQueue); } while(0)
 #define traceBLOCKING_ON_QUEUE_SEND(pxQueue) \
     do { rtos_obj_trace = (uint32_t)(pxQueue); } while(0)
+
+/* Event Groups: set bit0=1 to distinguish from Queue_t addresses */
+#define traceEVENT_GROUP_WAIT_BITS_BLOCK(xEventGroup, uxBitsToWaitFor) \
+    do { rtos_obj_trace = (uint32_t)(xEventGroup) | 1u; } while(0)
+#define traceEVENT_GROUP_SYNC_BLOCK(xEventGroup, uxBitsToSet, uxBitsToWaitFor) \
+    do { rtos_obj_trace = (uint32_t)(xEventGroup) | 1u; } while(0)
+
+/* Delays: write 0 for prev_state=S in ftrace */
+#define traceTASK_DELAY()            do { rtos_obj_trace = 0; } while(0)
+#define traceTASK_DELAY_UNTIL(x)     do { rtos_obj_trace = 0; } while(0)
 ```
 
-These macros are called by FreeRTOS internally when a task is about to block
-on `xQueueReceive`, `xSemaphoreTake`, `xQueueSend`, etc. Writing the
-`Queue_t` address to `rtos_obj_trace` triggers DWT comparator 2.
+These macros are called by FreeRTOS internally when a task is about to block.
+Writing the object address to `rtos_obj_trace` triggers DWT comparator 2.
+
+For Event Groups, bit 0 is set to signal that the address points to an
+`EventGroup_t` (not a `Queue_t`). Since all Cortex-M heap addresses are
+word-aligned, bit 0 is always 0 for real pointers — the host strips this
+flag and forces the object type to `evtflags`.
 
 ### 2. Define the trace variable
 
@@ -160,25 +176,19 @@ When a DWT comp2 event arrives with a `Queue_t` address:
 
 ## Limitations
 
-### Event Groups not supported (yet)
+### Event Groups have no names
 
-FreeRTOS Event Groups (`xEventGroupWaitBits`) use `EventGroup_t`, which is a
-different structure from `Queue_t`. The `traceBLOCKING_ON_QUEUE_*` hooks do
-not fire for event group operations.
+Event Groups (`EventGroup_t`) are supported via the bit-flag encoding
+mechanism (bit 0 set in the address). However, `EventGroup_t` does not
+contain a name field and there is no equivalent of `xQueueRegistry` for
+event groups. They always appear as `evtflags:0x24001234`.
 
-Available hooks: `traceEVENT_GROUP_WAIT_BITS_BLOCK`, `traceEVENT_GROUP_SYNC_BLOCK`.
-These require a different mechanism — see the source code for the bit-flag
-encoding approach planned for future support.
+### Memory Pools not available
 
-### Task delays not tracked by default
-
-`vTaskDelay()` and `vTaskDelayUntil()` do not write to `rtos_obj_trace` by
-default. To get `prev_state=S` for delays, add:
-
-```c
-#define traceTASK_DELAY()            do { rtos_obj_trace = 0; } while(0)
-#define traceTASK_DELAY_UNTIL(x)     do { rtos_obj_trace = 0; } while(0)
-```
+FreeRTOS does not have native memory pools. The CMSIS-RTOS2 wrapper
+implements `osMemoryPoolAlloc` using an internal counting semaphore — this
+semaphore will appear as a `sem:0xNNNN` event (without a registry name),
+not as a dedicated `mpool:` event.
 
 ### Unregistered objects
 

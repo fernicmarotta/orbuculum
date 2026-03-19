@@ -414,13 +414,47 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     if (value == 0xFFFFFFFF)
         return;
 
-    struct rtosObject *obj = find_or_create_object(rtos, value);
-    if (!obj)
+    /* Bit 0 encodes non-Queue_t objects (FreeRTOS Event Groups).
+     * All real Cortex-M addresses are word-aligned so bit 0 is always 0
+     * for Queue_t pointers.  Strip the flag and pass the real address. */
+    bool is_non_queue = (value & 1u);
+    uint32_t real_addr = value & ~1u;
+
+    if (!real_addr)
         return;
+
+    struct rtosObject *obj = find_or_create_object(rtos, real_addr);
+    if (!obj)
+    {
+        /* read_object_info may have rejected this address (e.g. EventGroup_t
+         * fails pcHead validation).  Create a minimal object directly. */
+        if (is_non_queue)
+        {
+            obj = calloc(1, sizeof(struct rtosObject));
+            if (!obj)
+                return;
+            obj->cb_addr = real_addr;
+            obj->type = RTOS_OBJ_EVENT_FLAGS;
+            obj->type_prefix = "evtflags";
+            snprintf(obj->name, sizeof(obj->name), "0x%08X", real_addr);
+            HASH_ADD_INT(rtos->objects, cb_addr, obj);
+        }
+        else
+        {
+            return;
+        }
+    }
+
+    /* Force type for non-Queue_t objects that were created with UNKNOWN type */
+    if (is_non_queue && obj->type == RTOS_OBJ_UNKNOWN)
+    {
+        obj->type = RTOS_OBJ_EVENT_FLAGS;
+        obj->type_prefix = "evtflags";
+    }
 
     obj->event_count++;
     rtos->pending_prev_state = 'D';
-    rtos->pending_object_addr = value;
+    rtos->pending_object_addr = real_addr;
 
     /* Emit B/E slice begin + counter rising edge on current thread */
     if (rtos->output_config)
