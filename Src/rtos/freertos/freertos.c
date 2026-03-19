@@ -340,6 +340,39 @@ static uint32_t find_symbol_address(const char *elfFile, const char *symbol_name
 }
 
 
+static uint32_t find_symbol_size(const char *elfFile, const char *symbol_name)
+{
+    if (!elfFile || !symbol_name)
+    {
+        return 0;
+    }
+
+    char cmd[512];
+    FILE *fp;
+    char line[256];
+    uint32_t size = 0;
+
+    /* objdump -t output: "ADDR FLAGS TYPE SECTION\tSIZE NAME"
+     * e.g.: "24019628 g     O .bss\t00000040 xQueueRegistry"
+     * The size field is between the tab after section and the symbol name. */
+    snprintf(cmd, sizeof(cmd),
+             "arm-none-eabi-objdump -t %s 2>/dev/null | grep '%s$' | awk '{print $(NF-1)}'",
+             elfFile, symbol_name);
+
+    fp = popen(cmd, "r");
+    if (fp && fgets(line, sizeof(line), fp))
+    {
+        size = strtoul(line, NULL, 16);
+    }
+    if (fp)
+    {
+        pclose(fp);
+    }
+
+    return size;
+}
+
+
 
 /* Initialize FreeRTOS tracking */
 static void init_default_offsets(struct freertos_private *priv)
@@ -349,6 +382,10 @@ static void init_default_offsets(struct freertos_private *priv)
     priv->end_of_stack_offset = FREERTOS_TCB_END_OF_STACK_OFFSET;
     priv->max_task_name_len = FREERTOS_DEFAULT_MAX_TASK_NAME_LEN;
     priv->has_end_of_stack = true;
+    priv->queue_type_offset = -1;
+    priv->has_queue_type = false;
+    priv->queue_registry_addr = 0;
+    priv->has_queue_registry = false;
 }
 
 
@@ -371,6 +408,82 @@ static void detect_tcb_offsets_from_dwarf(struct freertos_private *priv, struct 
     off = SymbolGetStructOffset(symbols, "TCB_t", "pxEndOfStack");
     if (off >= 0)
         priv->end_of_stack_offset = (uint8_t)off;
+
+    /* Detect Queue_t.ucQueueType offset (present when configUSE_TRACE_FACILITY=1) */
+    priv->queue_type_offset = SymbolGetStructOffset(symbols, "Queue_t", "ucQueueType");
+    priv->has_queue_type = (priv->queue_type_offset >= 0);
+
+    if (priv->has_queue_type)
+        genericsReport(V_INFO, "FreeRTOS: Queue_t.ucQueueType offset=%d" EOL, priv->queue_type_offset);
+
+    /* Detect xQueueRegistry[] for object name lookup.
+     * The name is NOT in Queue_t — it's in a separate registry array.
+     * All offsets and sizes come from DWARF / ELF — nothing hardcoded. */
+    if (symbols->elfFile)
+    {
+        priv->queue_registry_addr = find_symbol_address(symbols->elfFile, "xQueueRegistry");
+        if (priv->queue_registry_addr)
+        {
+            /* Get QueueRegistryItem_t field offsets from DWARF */
+            int32_t name_off = SymbolGetStructOffset(symbols, "QueueRegistryItem_t", "pcQueueName");
+            int32_t handle_off = SymbolGetStructOffset(symbols, "QueueRegistryItem_t", "xHandle");
+
+            if (name_off < 0 || handle_off < 0)
+            {
+                genericsReport(V_WARN, "FreeRTOS: Cannot resolve QueueRegistryItem_t fields from DWARF" EOL);
+            }
+            else
+            {
+                priv->registry_name_offset = (uint8_t)name_off;
+                priv->registry_handle_offset = (uint8_t)handle_off;
+
+                /* Get sizeof(QueueRegistryItem_t) via GDB and total array
+                 * size from objdump, then derive entry count. */
+                uint32_t sym_size = find_symbol_size(symbols->elfFile, "xQueueRegistry");
+                int32_t item_size = -1;
+                {
+                    char cmd[512];
+                    snprintf(cmd, sizeof(cmd),
+                             "gdb-multiarch -batch -ex \"print sizeof(QueueRegistryItem_t)\" %s 2>/dev/null",
+                             symbols->elfFile);
+                    FILE *fp = popen(cmd, "r");
+                    if (fp)
+                    {
+                        char line[256];
+                        if (fgets(line, sizeof(line), fp))
+                        {
+                            char *eq = strchr(line, '=');
+                            if (eq)
+                                item_size = (int32_t)strtol(eq + 1, NULL, 10);
+                        }
+                        pclose(fp);
+                    }
+                }
+
+                if (item_size > 0 && sym_size > 0)
+                {
+                    priv->registry_item_size = (uint8_t)item_size;
+                    priv->queue_registry_size = (uint8_t)(sym_size / (uint32_t)item_size);
+                    priv->has_queue_registry = true;
+
+                    genericsReport(V_INFO, "FreeRTOS: xQueueRegistry at 0x%08X, %d entries of %d bytes "
+                                  "(name@%d, handle@%d)" EOL,
+                                  priv->queue_registry_addr, priv->queue_registry_size,
+                                  priv->registry_item_size,
+                                  priv->registry_name_offset, priv->registry_handle_offset);
+                }
+                else
+                {
+                    genericsReport(V_WARN, "FreeRTOS: Cannot determine xQueueRegistry layout "
+                                  "(sym_size=%u, item_size=%d)" EOL, sym_size, item_size);
+                }
+            }
+        }
+        else
+        {
+            genericsReport(V_INFO, "FreeRTOS: xQueueRegistry not found (configQUEUE_REGISTRY_SIZE=0?)" EOL);
+        }
+    }
 }
 
 
@@ -512,6 +625,109 @@ static uint32_t freertos_get_watchpoint_addr(struct rtosState *rtos)
 }
 
 
+/* -------------------------------------------------------------------------
+ * Object tracking (Queue_t → mutex/semaphore/queue)
+ * ------------------------------------------------------------------------- */
+
+static enum rtosObjectType freertos_queue_type_to_object_type(uint8_t queue_type)
+{
+    switch (queue_type)
+    {
+        case FREERTOS_QUEUE_TYPE_MUTEX:   return RTOS_OBJ_MUTEX;
+        case FREERTOS_QUEUE_TYPE_RMUTEX:  return RTOS_OBJ_MUTEX;
+        case FREERTOS_QUEUE_TYPE_CSEM:    return RTOS_OBJ_SEMAPHORE;
+        case FREERTOS_QUEUE_TYPE_BSEM:    return RTOS_OBJ_SEMAPHORE;
+        case FREERTOS_QUEUE_TYPE_BASE:    return RTOS_OBJ_MESSAGE_QUEUE;
+        default:                          return RTOS_OBJ_UNKNOWN;
+    }
+}
+
+static const char *freertos_queue_type_prefix(uint8_t queue_type)
+{
+    switch (queue_type)
+    {
+        case FREERTOS_QUEUE_TYPE_MUTEX:   return "mutex";
+        case FREERTOS_QUEUE_TYPE_RMUTEX:  return "rmutex";
+        case FREERTOS_QUEUE_TYPE_CSEM:    return "sem";
+        case FREERTOS_QUEUE_TYPE_BSEM:    return "sem";
+        case FREERTOS_QUEUE_TYPE_BASE:    return "queue";
+        default:                          return "obj";
+    }
+}
+
+static int freertos_read_object_info(struct rtosState *rtos, struct rtosObject *obj, uint32_t cb_addr)
+{
+    if (!rtos || !obj || !cb_addr)
+        return -1;
+
+    /* Queue_t.pcHead (offset 0) is a pointer to the queue storage area —
+     * always non-null and word-aligned for any valid queue.
+     * A failed read (unmapped memory) returns 0 — reject early. */
+    uint32_t pcHead = rtosReadMemoryWord(cb_addr);
+    if (!pcHead || pcHead == 0xFFFFFFFF || (pcHead & 3))
+        return -1;
+
+    struct freertos_private *priv = (struct freertos_private *)rtos->priv;
+
+    /* Read ucQueueType from Queue_t (if available) */
+    if (priv && priv->has_queue_type)
+    {
+        uint32_t type_addr = cb_addr + (uint32_t)priv->queue_type_offset;
+        uint32_t aligned_addr = type_addr & ~3u;
+        uint32_t byte_pos = type_addr & 3u;
+        uint32_t type_word = rtosReadMemoryWord(aligned_addr);
+        uint8_t queue_type = (uint8_t)((type_word >> (byte_pos * 8)) & 0xFF);
+
+        obj->type = freertos_queue_type_to_object_type(queue_type);
+        obj->type_prefix = freertos_queue_type_prefix(queue_type);
+
+        genericsReport(V_DEBUG, "FreeRTOS ObjType: CB=0x%08X type_off=%d type_addr=0x%08X word=0x%08X byte_pos=%u raw=0x%02X -> %s" EOL,
+                      cb_addr, priv->queue_type_offset, type_addr, type_word, byte_pos, queue_type, obj->type_prefix);
+    }
+    else
+    {
+        obj->type = RTOS_OBJ_UNKNOWN;
+        obj->type_prefix = "obj";
+    }
+
+    /* Look up name in xQueueRegistry[] — a separate array of {pcQueueName, xHandle} */
+    bool name_found = false;
+    if (priv && priv->has_queue_registry)
+    {
+        for (uint8_t i = 0; i < priv->queue_registry_size; i++)
+        {
+            uint32_t entry_addr = priv->queue_registry_addr + (i * priv->registry_item_size);
+            uint32_t handle = rtosReadMemoryWord(entry_addr + priv->registry_handle_offset);
+
+            if (handle == cb_addr)
+            {
+                uint32_t name_ptr = rtosReadMemoryWord(entry_addr + priv->registry_name_offset);
+                if (name_ptr && name_ptr != 0xFFFFFFFF)
+                {
+                    char name_buf[64] = {0};
+                    char *name_str = rtosReadMemoryString(name_ptr, name_buf, sizeof(name_buf));
+                    if (name_str && name_buf[0] >= 0x20 && name_buf[0] < 0x7F)
+                    {
+                        strncpy(obj->name, name_buf, sizeof(obj->name) - 1);
+                        obj->name[sizeof(obj->name) - 1] = '\0';
+                        name_found = true;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    if (!name_found)
+        snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+
+    genericsReport(V_DEBUG, "FreeRTOS Object: CB=0x%08X, Type=%s, Name=%s" EOL,
+                  cb_addr, obj->type_prefix, obj->name);
+
+    return 0;
+}
+
+
 static const struct rtosOps freertos_ops =
 {
     .read_thread_info = freertos_read_thread_info,
@@ -522,7 +738,8 @@ static const struct rtosOps freertos_ops =
     .get_state_name = freertos_get_state_name,
     .is_idle_thread = freertos_is_idle_thread,
     .verify_target_match = freertos_verify_target_match,
-    .get_watchpoint_addr = freertos_get_watchpoint_addr
+    .get_watchpoint_addr = freertos_get_watchpoint_addr,
+    .read_object_info = freertos_read_object_info
 };
 
 

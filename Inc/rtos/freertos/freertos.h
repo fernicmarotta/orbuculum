@@ -137,6 +137,19 @@
 #define FREERTOS_MAX_STACK_SCAN_WORDS       (FREERTOS_STACK_WORDS_PER_FRAME * FREERTOS_MAX_FRAMES_TO_SCAN)
 
 /* --------------------------------------------------------------------------
+ * FreeRTOS Queue types (ucQueueType in Queue_t)
+ * --------------------------------------------------------------------------
+ * All blocking objects are internally Queue_t. ucQueueType identifies kind.
+ * Only present when configQUEUE_REGISTRY_SIZE > 0.
+ */
+/* Values from FreeRTOS queue.h: queueQUEUE_TYPE_* */
+#define FREERTOS_QUEUE_TYPE_BASE    0   /* Plain queue / queue set */
+#define FREERTOS_QUEUE_TYPE_MUTEX   1   /* Mutex */
+#define FREERTOS_QUEUE_TYPE_CSEM    2   /* Counting semaphore */
+#define FREERTOS_QUEUE_TYPE_BSEM    3   /* Binary semaphore */
+#define FREERTOS_QUEUE_TYPE_RMUTEX  4   /* Recursive mutex */
+
+/* --------------------------------------------------------------------------
  * Private data for FreeRTOS tracking
  * --------------------------------------------------------------------------
  */
@@ -157,6 +170,18 @@ struct freertos_private {
     uint8_t priority_offset;             /* Offset of uxPriority in TCB */
     uint8_t end_of_stack_offset;         /* Offset of pxEndOfStack in TCB */
     bool has_end_of_stack;               /* Whether pxEndOfStack exists */
+
+    /* Queue_t field offsets for object tracking (from DWARF) */
+    int32_t queue_type_offset;           /* Queue_t.ucQueueType (-1 if absent) */
+    bool has_queue_type;                 /* true if ucQueueType offset found */
+
+    /* Queue registry for object name lookup */
+    uint32_t queue_registry_addr;        /* Address of xQueueRegistry[] symbol */
+    uint8_t queue_registry_size;         /* configQUEUE_REGISTRY_SIZE */
+    uint8_t registry_item_size;          /* sizeof(QueueRegistryItem_t) */
+    uint8_t registry_name_offset;        /* offset of pcQueueName in registry item */
+    uint8_t registry_handle_offset;      /* offset of xHandle in registry item */
+    bool has_queue_registry;             /* true if xQueueRegistry found */
 };
 
 /* API functions */
