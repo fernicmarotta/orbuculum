@@ -629,6 +629,27 @@ static uint32_t zephyr_get_watchpoint_addr(struct rtosState *rtos)
  * Operations table
  * ------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------
+ * Object tracking (minimal — Zephyr has no unified object header)
+ * ------------------------------------------------------------------------- */
+
+static int zephyr_read_object_info(struct rtosState *rtos, struct rtosObject *obj, uint32_t cb_addr)
+{
+    if (!rtos || !obj || !cb_addr)
+        return -1;
+
+    /* Zephyr objects (k_sem, k_mutex, k_msgq) have no common type ID field,
+     * so we cannot determine the object type from the address alone. */
+    obj->type = RTOS_OBJ_UNKNOWN;
+    obj->type_prefix = "obj";
+    snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+
+    genericsReport(V_INFO, "Zephyr Object: CB=0x%08X, Name=%s" EOL, cb_addr, obj->name);
+
+    return 0;
+}
+
+
 static const struct rtosOps zephyr_ops =
 {
     .read_thread_info = zephyr_read_thread_info,
@@ -639,7 +660,8 @@ static const struct rtosOps zephyr_ops =
     .get_state_name = zephyr_get_state_name,
     .is_idle_thread = zephyr_is_idle_thread,
     .verify_target_match = zephyr_verify_target_match,
-    .get_watchpoint_addr = zephyr_get_watchpoint_addr
+    .get_watchpoint_addr = zephyr_get_watchpoint_addr,
+    .read_object_info = zephyr_read_object_info
 };
 
 
