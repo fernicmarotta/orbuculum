@@ -638,13 +638,40 @@ static int zephyr_read_object_info(struct rtosState *rtos, struct rtosObject *ob
     if (!rtos || !obj || !cb_addr)
         return -1;
 
-    /* Zephyr objects (k_sem, k_mutex, k_msgq) have no common type ID field,
-     * so we cannot determine the object type from the address alone. */
-    obj->type = RTOS_OBJ_UNKNOWN;
-    obj->type_prefix = "obj";
+    /* Zephyr objects have no common type ID field.  The firmware encodes
+     * the object type in bits [1:0] of the DWT comp2 value, which
+     * rtosHandleObjectEvent() stores in pending_type_hint before calling us.
+     *   00 = mutex, 01 = sem, 10 = msgq, 11 = event */
+    static const struct
+    {
+        enum rtosObjectType type;
+        const char *prefix;
+    } type_map[] =
+    {
+        { RTOS_OBJ_MUTEX,         "mutex"    },  /* hint = 0 */
+        { RTOS_OBJ_SEMAPHORE,     "sem"      },  /* hint = 1 */
+        { RTOS_OBJ_MESSAGE_QUEUE, "msgqueue" },  /* hint = 2 */
+        { RTOS_OBJ_EVENT_FLAGS,   "evtflags" },  /* hint = 3 */
+    };
+
+    uint8_t hint = rtos->pending_type_hint;
+
+    if (hint < 4)
+    {
+        obj->type = type_map[hint].type;
+        obj->type_prefix = type_map[hint].prefix;
+    }
+    else
+    {
+        obj->type = RTOS_OBJ_UNKNOWN;
+        obj->type_prefix = "obj";
+    }
+
+    /* Zephyr objects have no name registry — use hex address */
     snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
 
-    genericsReport(V_INFO, "Zephyr Object: CB=0x%08X, Name=%s" EOL, cb_addr, obj->name);
+    genericsReport(V_INFO, "Zephyr Object: CB=0x%08X, type=%s, Name=%s" EOL,
+                  cb_addr, obj->type_prefix, obj->name);
 
     return 0;
 }
