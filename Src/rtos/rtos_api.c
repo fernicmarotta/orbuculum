@@ -414,14 +414,20 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     if (value == 0xFFFFFFFF)
         return;
 
-    /* Bit 0 encodes non-Queue_t objects (FreeRTOS Event Groups).
-     * All real Cortex-M addresses are word-aligned so bit 0 is always 0
-     * for Queue_t pointers.  Strip the flag and pass the real address. */
-    bool is_non_queue = (value & 1u);
-    uint32_t real_addr = value & ~1u;
+    /* Bits [1:0] encode the object type hint from firmware.
+     * All Cortex-M heap addresses are word-aligned so bits [1:0] are always 0
+     * for real pointers.  Strip the hint and pass the real address.
+     *
+     * FreeRTOS:  bit0=1 → EventGroup_t (bit1 always 0)
+     * Zephyr:    bits[1:0] = 00:mutex, 01:sem, 10:msgq, 11:event */
+    uint8_t type_hint = (uint8_t)(value & 3u);
+    uint32_t real_addr = value & ~3u;
+    bool is_non_queue = (type_hint != 0);
 
     if (!real_addr)
         return;
+
+    rtos->pending_type_hint = type_hint;
 
     struct rtosObject *obj = find_or_create_object(rtos, real_addr);
     if (!obj)
