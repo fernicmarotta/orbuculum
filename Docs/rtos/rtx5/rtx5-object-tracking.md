@@ -21,8 +21,8 @@ Perfetto.
  EvrRtx*Pending()                       ITM decoder
    │                                      │
    ▼                                      ▼
- rtos_obj_trace = cb_addr  ──DWT──►  _handleDataAccessWP (comp2)
-                           comp2        │
+ rtos_obj_trace = cb_addr  ──DWT──►  _handleDataAccessWP (comp1)
+                           comp1        │
                            ITM pkt      ▼
                                      rtosHandleObjectEvent()
                                         │
@@ -42,7 +42,7 @@ Perfetto.
 
 ## Type Encoding (bits [2:0])
 
-The DWT comp2 value uses bit [2] for acquire/release signaling. RTX5
+The DWT comp1 value uses bit [2] for acquire/release signaling. RTX5
 control blocks have an `id` byte at offset 0 that the host reads via
 telnet — no firmware type hint in bits [1:0] is needed (always 0).
 
@@ -104,7 +104,7 @@ These functions are `__WEAK`-linked RTX5 event recorder callbacks defined in
 `rtx_evr.c`. The RTX kernel calls them automatically when a thread is about
 to block (acquire) or when an object operation completes (release). Our
 implementations override the weak stubs with a single write to
-`rtos_obj_trace`, which triggers DWT comparator 2.
+`rtos_obj_trace`, which triggers DWT comparator 1.
 
 **Blocking hooks** (acquire): bit [2]=0. The host emits `C|1` and sets
 `prev_state=D` in ftrace.
@@ -126,16 +126,16 @@ without release hooks works exactly as before (backward compatible). All
 Add the `rtos_dwt2_config` proc to your OpenOCD board config:
 
 ```tcl
-set DWT_COMP2 0xE0001040
-set DWT_MASK2 0xE0001044
-set DWT_FUNC2 0xE0001048
+set DWT_COMP1 0xE0001030
+set DWT_MASK1 0xE0001034
+set DWT_FUNC1 0xE0001038
 
 proc rtos_dwt2_config {addr} {
-    global DWT_COMP2 DWT_MASK2 DWT_FUNC2
-    mww $DWT_COMP2 $addr
+    global DWT_COMP1 DWT_MASK1 DWT_FUNC1
+    mww $DWT_COMP1 $addr
     mww $DWT_MASK2 0
     mww $DWT_FUNC2 0x0D
-    echo "DWT Comparator 2 configured for data write+value at [format 0x%08X $addr]"
+    echo "DWT Comparator 1 configured for data write+value at [format 0x%08X $addr]"
 }
 ```
 
@@ -154,7 +154,7 @@ orbtop-rtos \
 ```
 
 The `-w rtos_obj_trace` option tells orbtop-rtos to look up the symbol address
-in the ELF and configure DWT comparator 2 via `rtos_dwt2_config`.
+in the ELF and configure DWT comparator 1 via `rtos_dwt2_config`.
 
 ## How It Works Internally
 

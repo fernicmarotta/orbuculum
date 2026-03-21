@@ -1181,7 +1181,7 @@ Command line options:
 
  `-V, --version`: Print version and exit.
 
- `-w, --watch-object <symbol>`: Variable name for kernel object tracking via DWT comparator 2.
+ `-w, --watch-object <symbol>`: Variable name for kernel object tracking via DWT comparator 1.
      The firmware writes the object address to this variable when a thread blocks on a kernel
      object. Requires RTOS-specific firmware hooks (see `Docs/rtos/`).
 

@@ -350,7 +350,7 @@ void telnet_configure_dwt(uint32_t watch_address) {
     _readLine(_telnetSocket, response, sizeof(response), 500);
     _drainSocket(_telnetSocket);
 
-    genericsReport(V_INFO, "Configured DWT comparator 1 to watch 0x%08X\n", watch_address);
+    genericsReport(V_INFO, "Configured DWT comparator 0 to watch 0x%08X\n", watch_address);
 }
 
 void telnet_configure_dwt2(uint32_t watch_address) {
@@ -367,7 +367,7 @@ void telnet_configure_dwt2(uint32_t watch_address) {
     _readLine(_telnetSocket, response, sizeof(response), 500);
     _drainSocket(_telnetSocket);
 
-    genericsReport(V_INFO, "Configured DWT comparator 2 to watch 0x%08X (data write with value)\n", watch_address);
+    genericsReport(V_INFO, "Configured DWT comparator 1 to watch 0x%08X (data write with value)\n", watch_address);
 }
 
 void telnet_configure_exception_trace(bool enable) {

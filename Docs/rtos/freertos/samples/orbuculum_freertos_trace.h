@@ -19,7 +19,7 @@ extern volatile uint32_t rtos_obj_trace;
 #define FREERTOS_RELEASE_BIT 4u   /* bit [2] = release event */
 
 /* ================================================================
- * Blocking hooks (acquire) — DWT comp2 writes
+ * Blocking hooks (acquire) — DWT comp1 writes
  * ================================================================ */
 
 /* Queue-based objects: mutex, semaphore, queue (tag=00) */

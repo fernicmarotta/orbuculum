@@ -39,7 +39,7 @@ The file contains three event types:
 | Event | Description | Hardware source | Option |
 |-------|-------------|-----------------|--------|
 | `sched_switch` | RTOS context switch between threads. Records prev/next thread name, priority, and scheduling state (R/S/D). | DWT comparator 0 on current-thread-pointer variable | always (with `-K`) |
-| `tracing_mark_write: C\|1\|...` | Kernel object blocking event. Records which mutex, semaphore, queue, or event a thread is waiting on. Appears as a counter track in Perfetto. | DWT comparator 2 on `rtos_obj_trace` variable | `-w` |
+| `tracing_mark_write: C\|1\|...` | Kernel object blocking event. Records which mutex, semaphore, queue, or event a thread is waiting on. Appears as a counter track in Perfetto. | DWT comparator 1 on `rtos_obj_trace` variable | `-w` |
 | `tracing_mark_write: C\|0\|...` | Firmware-defined ITM stimulus channel value. Records arbitrary 32-bit values written by firmware to ITM stimulus ports. Appears as a counter track in Perfetto. | ITM stimulus port writes | `-c` |
 
 ---
@@ -70,7 +70,7 @@ Generated on every RTOS context switch detected via DWT comparator 0.
 | `S` | Sleeping (voluntary delay) | "End State: Sleeping" | `k_sleep`, `osDelay`, `vTaskDelay` |
 | `D` | Blocked on kernel object | "End State: Uninterruptible Sleep" | Mutex, semaphore, queue, event |
 
-State `D` requires the `-w` option (DWT comp2 watchpoint on `rtos_obj_trace`).
+State `D` requires the `-w` option (DWT comp1 watchpoint on `rtos_obj_trace`).
 Without `-w`, all switches show `R` (no way to distinguish blocked vs preempted).
 
 ### Real Examples

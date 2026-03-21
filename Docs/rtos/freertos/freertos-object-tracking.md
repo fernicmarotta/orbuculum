@@ -21,8 +21,8 @@ Perfetto.
  traceBLOCKING_ON_QUEUE_*()             ITM decoder
    │                                      │
    ▼                                      ▼
- rtos_obj_trace = Queue_t*  ──DWT──►  _handleDataAccessWP (comp2)
-                            comp2        │
+ rtos_obj_trace = Queue_t*  ──DWT──►  _handleDataAccessWP (comp1)
+                            comp1        │
                             ITM pkt      ▼
                                       rtosHandleObjectEvent()
                                          │
@@ -43,7 +43,7 @@ Perfetto.
 
 ## Type Encoding (bits [2:0])
 
-The DWT comp2 value uses three low bits for metadata. Cortex-M SRAM
+The DWT comp1 value uses three low bits for metadata. Cortex-M SRAM
 objects are 4+ byte aligned, so bits [2:0] are always zero in real
 pointers and are free for encoding:
 
@@ -154,16 +154,16 @@ vQueueAddToRegistry(myQueue, "TestQueue");
 Add the `rtos_dwt2_config` proc to your OpenOCD board config:
 
 ```tcl
-set DWT_COMP2 0xE0001040
-set DWT_MASK2 0xE0001044
-set DWT_FUNC2 0xE0001048
+set DWT_COMP1 0xE0001030
+set DWT_MASK1 0xE0001034
+set DWT_FUNC1 0xE0001038
 
 proc rtos_dwt2_config {addr} {
-    global DWT_COMP2 DWT_MASK2 DWT_FUNC2
-    mww $DWT_COMP2 $addr
+    global DWT_COMP1 DWT_MASK1 DWT_FUNC1
+    mww $DWT_COMP1 $addr
     mww $DWT_MASK2 0
     mww $DWT_FUNC2 0x0D
-    echo "DWT Comparator 2 configured for data write+value at [format 0x%08X $addr]"
+    echo "DWT Comparator 1 configured for data write+value at [format 0x%08X $addr]"
 }
 ```
 
@@ -185,7 +185,7 @@ proc rtos_dwt2_config {addr} {
 |--------|-------------------------------------------------|
 | `-e`   | Firmware ELF file (for DWARF + symbols)         |
 | `-T`   | RTOS type (`freertos`, `rtx5`, `zephyr`)        |
-| `-w`   | Watchpoint variable for object tracking (comp2) |
+| `-w`   | Watchpoint variable for object tracking (comp1) |
 | `-s`   | orbuculum server (host:port)                    |
 | `-W`   | OpenOCD telnet port                             |
 | `-F`   | CPU frequency in Hz                             |
@@ -196,7 +196,7 @@ proc rtos_dwt2_config {addr} {
 
 ### Bit stripping and type detection
 
-When a DWT comp2 event arrives, the host:
+When a DWT comp1 event arrives, the host:
 
 1. Strips bits [2:0]: `is_release = (value & 4) != 0`, `type_hint = value & 3`,
    `real_addr = value & ~7u`
@@ -274,7 +274,7 @@ their hex address instead of a name: `sem:0x24006958`.
 ### Task Notifications not tracked
 
 Task Notifications have no distinct kernel object address — the "object"
-is the task's own TCB. They cannot be tracked with the DWT comp2 mechanism.
+is the task's own TCB. They cannot be tracked with the DWT comp1 mechanism.
 
 ### Single CPU only
 

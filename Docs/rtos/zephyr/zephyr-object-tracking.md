@@ -18,8 +18,8 @@ time from scheduling latency.
  sys_port_trace_k_mutex_lock_blocking   ITM decoder
    │                                      │
    ▼                                      ▼
- rtos_obj_trace = k_mutex* | tag ─DWT─► _handleDataAccessWP (comp2)
-                             comp2         │
+ rtos_obj_trace = k_mutex* | tag ─DWT─► _handleDataAccessWP (comp1)
+                             comp1         │
                              ITM pkt       ▼
                                         rtosHandleObjectEvent()
                                            │
@@ -167,7 +167,7 @@ hooks for all supported Zephyr objects: `k_mutex`, `k_sem`, `k_msgq`, `k_event`,
 recursive entry.  `#include_next` pulls in the real Zephyr header, which
 with `CONFIG_TRACING=y` defines the `sys_port_trace_*_blocking` macros
 as no-ops.  Then `orbuculum_obj_trace.h` `#undef`s and redefines them
-with our DWT comp2 writes.  This works on all Zephyr versions (3.x and
+with our DWT comp1 writes.  This works on all Zephyr versions (3.x and
 4.x) without requiring
 [`CONFIG_TRACING_CUSTOM`](https://github.com/zephyrproject-rtos/zephyr/blob/main/subsys/tracing/Kconfig),
 which was added to `main` in
@@ -184,19 +184,19 @@ volatile uint32_t rtos_obj_trace __attribute__((used));
 
 ### 4. OpenOCD configuration
 
-Configure DWT comparator 2 on the `rtos_obj_trace` address:
+Configure DWT comparator 1 on the `rtos_obj_trace` address:
 
 ```tcl
-set DWT_COMP2 0xE0001040
-set DWT_MASK2 0xE0001044
-set DWT_FUNC2 0xE0001048
+set DWT_COMP1 0xE0001030
+set DWT_MASK1 0xE0001034
+set DWT_FUNC1 0xE0001038
 
 proc rtos_dwt2_config {addr} {
-    global DWT_COMP2 DWT_MASK2 DWT_FUNC2
-    mww $DWT_COMP2 $addr
-    mww $DWT_MASK2 0
-    mww $DWT_FUNC2 0x0D
-    echo "DWT Comparator 2 configured for data write+value at [format 0x%08X $addr]"
+    global DWT_COMP1 DWT_MASK1 DWT_FUNC1
+    mww $DWT_COMP1 $addr
+    mww $DWT_MASK1 0
+    mww $DWT_FUNC1 0x0D
+    echo "DWT Comparator 1 configured for data write+value at [format 0x%08X $addr]"
 }
 ```
 
@@ -218,7 +218,7 @@ proc rtos_dwt2_config {addr} {
 |--------|-------------------------------------------------|
 | `-e`   | ELF file (for DWARF + symbols)                  |
 | `-T`   | RTOS type (`zephyr`)                            |
-| `-w`   | Watchpoint variable for object tracking (comp2) |
+| `-w`   | Watchpoint variable for object tracking (comp1) |
 | `-s`   | orbuculum server (host:port)                    |
 | `-W`   | OpenOCD telnet port                             |
 | `-F`   | CPU frequency in Hz                             |
@@ -232,7 +232,7 @@ proc rtos_dwt2_config {addr} {
 The object type and acquire/release direction are encoded by the firmware
 in bits [2:0] of the value written to `rtos_obj_trace`.
 
-When `rtosHandleObjectEvent()` receives a DWT comp2 value:
+When `rtosHandleObjectEvent()` receives a DWT comp1 value:
 
 1. **Strip bits [2:0]** → `is_release` (bit 2), `type_hint` (bits 1:0), `real_addr`
 2. If **release**: look up existing object, emit C|0 at release timestamp
@@ -351,7 +351,7 @@ always appear with their hex address: `mutex:0x20001234`.
 The `sys_port_trace_*_blocking` macro signatures are not part of
 Zephyr's stable API.  If Zephyr changes the parameter list of these
 macros in a future release, `orbuculum_obj_trace.h` will need updating.
-The orbuculum host side is not affected — it only reads the DWT comp2
+The orbuculum host side is not affected — it only reads the DWT comp1
 value.
 
 ### Single CPU only

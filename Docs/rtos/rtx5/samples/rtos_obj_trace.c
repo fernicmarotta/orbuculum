@@ -3,7 +3,7 @@
  *
  * Add this file to your firmware project build.  These functions override
  * the __WEAK stubs in rtx_evr.c to write object addresses (with type and
- * release bits) to rtos_obj_trace, which triggers DWT comparator 2.
+ * release bits) to rtos_obj_trace, which triggers DWT comparator 1.
  *
  * Prerequisites in RTX_Config.h:
  *   OS_EVR_MUTEX = 1, OS_EVR_SEMAPHORE = 1, OS_EVR_EVFLAGS = 1,

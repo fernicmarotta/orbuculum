@@ -160,9 +160,9 @@ struct rtosState {
 
     /* Object tracking (mutex, semaphore, etc.) */
     struct rtosObject *objects;             /* Hash table of RTOS objects */
-    uint32_t pending_object_addr;           /* Object addr from DWT comp2 (0 = delay, >0 = blocked) */
+    uint32_t pending_object_addr;           /* Object addr from DWT comp1 (0 = delay, >0 = blocked) */
     char pending_prev_state;                /* prev_state for next context switch ('R', 'S', 'D') */
-    uint8_t pending_type_hint;              /* bits [1:0] from DWT comp2 value — object type from firmware */
+    uint8_t pending_type_hint;              /* bits [1:0] from DWT comp1 value — object type from firmware */
     
     /* RTOS-specific private data */
     void *priv;                             /* Private data for RTOS implementation */
@@ -228,7 +228,7 @@ void rtosResetThreadCounters(struct rtosState *rtos);
 uint32_t rtosReadMemoryWord(uint32_t address);
 char *rtosReadMemoryString(uint32_t address, char *buffer, size_t maxlen);
 
-/* Object event handling (DWT comp2 trigger) */
+/* Object event handling (DWT comp1 trigger) */
 void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
                            uint32_t value, uint64_t timestamp);
 

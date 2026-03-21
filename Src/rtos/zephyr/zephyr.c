@@ -639,7 +639,7 @@ static int zephyr_read_object_info(struct rtosState *rtos, struct rtosObject *ob
         return -1;
 
     /* Zephyr objects have no common type ID field.  The firmware encodes
-     * the object type in bits [1:0] of the DWT comp2 value, which
+     * the object type in bits [1:0] of the DWT comp1 value, which
      * rtosHandleObjectEvent() stores in pending_type_hint before calling us.
      *   00 = mutex, 01 = sem, 10 = msgq, 11 = event */
     static const struct

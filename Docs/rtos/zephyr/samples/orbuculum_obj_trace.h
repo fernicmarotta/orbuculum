@@ -3,7 +3,7 @@
  *
  * This header is included by the tracing.h wrapper (see tracing.h in this
  * directory) AFTER Zephyr's own tracing.h has been fully processed.
- * It #undefs the no-op macros and redefines them with DWT comp2 writes.
+ * It #undefs the no-op macros and redefines them with DWT comp1 writes.
  *
  * Also define the trace variable in any .c file:
  *

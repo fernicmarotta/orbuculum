@@ -127,7 +127,7 @@ sequenceDiagram
     Telnet-->>App: Address 0x20001234
 
     App->>Telnet: rtos_dwt_config 0x20001248
-    Note over Telnet,DWT: Configure DWT_COMP1 to watch<br/>current thread pointer address
+    Note over Telnet,DWT: Configure DWT_COMP0 to watch<br/>current thread pointer address
     
     Note over ITM: ITM constantly generates<br/>timestamp packets that<br/>App accumulates
     
@@ -165,7 +165,7 @@ The target must be configured with specific ITM settings:
 
 #### 2. DWT Configuration (via OpenOCD Telnet)
 
-The `rtos_dwt_config` function in `stm32h74x.cfg` configures DWT Comparator 1:
+The `rtos_dwt_config` function in `stm32h74x.cfg` configures DWT Comparator 0:
 
 ```tcl
 proc rtos_dwt_config {address} {
@@ -183,10 +183,10 @@ proc rtos_dwt_config {address} {
     # Enable DWT events, timestamps, SYNC in ITM
     mmw 0xE0000E80 0x0000000E 0   # ITM_TCR: DWTENA | TSENA | SYNCENA
 
-    # Configure DWT Comparator 1
-    mww 0xE0001030 $address       # DWT_COMP1 = watch address
-    mww 0xE0001034 0x00000000     # DWT_MASK1 = no masking
-    mww 0xE0001038 0x0000000D     # DWT_FUNC1 = data write+value
+    # Configure DWT Comparator 0
+    mww 0xE0001020 $address       # DWT_COMP0 = watch address
+    mww 0xE0001024 0x00000000     # DWT_MASK0 = no masking
+    mww 0xE0001028 0x0000000D     # DWT_FUNC0 = data write+value
 
     # Enable SYNC at safe default rate
     sync_config 1
@@ -638,9 +638,9 @@ $_CHIPNAME.cpu0 configure -event examine-end {
 # DWT registers for RTOS monitoring (defined in file)
 set DWT_CTRL    0xE0001000
 set DWT_CYCCNT  0xE0001004
-set DWT_COMP1   0xE0001030
-set DWT_MASK1   0xE0001034
-set DWT_FUNC1   0xE0001038
+set DWT_COMP0   0xE0001020
+set DWT_MASK0   0xE0001024
+set DWT_FUNC0   0xE0001028
 
 # DWT configuration function for RTOS
 proc rtos_dwt_config {address} {
@@ -658,10 +658,10 @@ proc rtos_dwt_config {address} {
     # Enable DWT events, timestamps, SYNC in ITM
     mmw 0xE0000E80 0x0000000E 0   # ITM_TCR: DWTENA | TSENA | SYNCENA
 
-    # Configure DWT Comparator 1 for data write+value tracking
-    mww 0xE0001030 $address       # DWT_COMP1 = watch address
-    mww 0xE0001034 0x00000000     # DWT_MASK1 = no masking
-    mww 0xE0001038 0x0000000D     # DWT_FUNC1 = data write+value
+    # Configure DWT Comparator 0 for data write+value tracking
+    mww 0xE0001020 $address       # DWT_COMP0 = watch address
+    mww 0xE0001024 0x00000000     # DWT_MASK0 = no masking
+    mww 0xE0001028 0x0000000D     # DWT_FUNC0 = data write+value
 
     # Enable SYNC at safe default rate
     sync_config 1
@@ -709,8 +709,8 @@ The data flow is simply:
 
 ```tcl
 # These functions are available via telnet for orbtop-rtos to call:
-proc rtos_dwt_config {address}    # Configure DWT comp1 for thread switch detection
-proc rtos_dwt2_config {address}   # Configure DWT comp2 for object tracking (-w)
+proc rtos_dwt_config {address}    # Configure DWT comp0 for thread switch detection
+proc rtos_dwt2_config {address}   # Configure DWT comp1 for object tracking (-w)
 proc exception_trace_enable {}     # Enable exception tracing (-E option)
 proc pc_sampling_config {freq}     # PC sampling rate (0=off, 1/6/24 Hz)
 proc sync_config {rate}            # SYNC packet rate (0=off, 1/6/24 Hz)
@@ -719,7 +719,7 @@ proc sync_config {rate}            # SYNC packet rate (0=off, 1/6/24 Hz)
 When orbtop-rtos starts, it:
 1. Connects to OpenOCD telnet (port 4444)
 2. Finds the osRtxInfo symbol address
-3. Calls `rtos_dwt_config 0xXXXXXXXX` via telnet to configure DWT Comparator 1
+3. Calls `rtos_dwt_config 0xXXXXXXXX` via telnet to configure DWT Comparator 0
 4. The DWT then monitors that address for thread switches!
 
 So the cfg provides both:
@@ -929,9 +929,9 @@ flowchart TD
 
 The DWT comparator monitors writes to the current-thread pointer (RTX5: `osRtxInfo.thread.run.curr`, FreeRTOS: `pxCurrentTCB`, Zephyr: `_kernel` + dynamic offset):
 
-- **DWT_COMP1**: Set to address of current thread pointer
-- **DWT_MASK1**: 0x00000000 (no masking, exact match)
-- **DWT_FUNC1**: 0x00000814
+- **DWT_COMP0**: Set to address of current thread pointer
+- **DWT_MASK0**: 0x00000000 (no masking, exact match)
+- **DWT_FUNC0**: 0x00000814
     - Bits 0-3: 0x4 = Generate watchpoint debug event
     - Bit 4: 1 = EMITRANGE
     - Bits 10-11: 0x2 = Data write of size 4 bytes

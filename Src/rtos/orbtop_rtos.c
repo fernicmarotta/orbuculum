@@ -396,13 +396,13 @@ void _handleDataAccessWP( struct wptMsg *m, struct ITMDecoder *i )
     /* Handle DWT watchpoint events */
     if ( _r.rtos && _r.rtos->enabled )
     {
-        if ( m->comp == 0 || m->comp == 1 )
+        if ( m->comp == 0 )
         {
             rtosHandleDWTMatchWithTimestamp(_r.rtos, _r.s, m->comp, 0, m->data, _r.timeStamp, options.telnetPort);
         }
-        else if ( m->comp == 2 )
+        else if ( m->comp == 1 )
         {
-            genericsReport( V_DEBUG, "DWT WP comp2 (object): data=0x%08X" EOL, m->data );
+            genericsReport( V_DEBUG, "DWT WP comp1 (object): data=0x%08X" EOL, m->data );
             rtosHandleObjectEvent(_r.rtos, _r.s, m->data, _r.timeStamp);
         }
     }
@@ -448,7 +448,7 @@ static void _configureObjectWatch(struct SymbolSet *symbols)
         return;
     }
 
-    genericsReport(V_INFO, "Configuring DWT comp2 for object watch: %s at 0x%08X" EOL,
+    genericsReport(V_INFO, "Configuring DWT comp1 for object watch: %s at 0x%08X" EOL,
                   options.objWatchSymbol, addr);
     telnet_configure_dwt2(addr);
 }
@@ -776,7 +776,7 @@ int main( int argc, char *argv[] )
         if ( _r.rtos )
         {
             genericsReport( V_INFO, "RTOS tracking enabled for %s" EOL, _r.rtos->name );
-            /* DWT comp2 for object watch is configured in _reinitializeRTOS()
+            /* DWT comp1 for object watch is configured in _reinitializeRTOS()
              * on the first stream connection — no need to do it here. */
         }
 

@@ -18,7 +18,7 @@
 /* Include the real Zephyr tracing.h first (fully) */
 #include_next <zephyr/tracing/tracing.h>
 
-/* Now override the blocking hooks with our DWT comp2 writes */
+/* Now override the blocking hooks with our DWT comp1 writes */
 #include "orbuculum_obj_trace.h"
 
 #endif /* ORBUCULUM_TRACING_WRAPPER_H */
