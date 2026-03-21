@@ -18,6 +18,7 @@ typedef void (*stats_fn)(OutputConfig*, StatsOutput*);
 typedef void (*rtos_info_fn)(OutputConfig*, void*);
 typedef void (*end_frame_fn)(OutputConfig*);
 typedef void (*thread_switch_fn)(OutputConfig*, struct rtosThread*, struct rtosThread*, uint64_t);
+typedef void (*itm_event_fn)(OutputConfig*, ItmEventOutput*, uint64_t);
 
 static const start_frame_fn start_frame_handlers[] = {
     [OUTPUT_CONSOLE] = output_console_start_frame,
@@ -72,6 +73,14 @@ static const thread_switch_fn thread_switch_handlers[] = {
     [OUTPUT_JSON_FILE] = NULL,
     [OUTPUT_JSON_UDP] = NULL,
     [OUTPUT_FTRACE] = output_ftrace_thread_switch,
+    [OUTPUT_DISABLED] = NULL
+};
+
+static const itm_event_fn itm_event_handlers[] = {
+    [OUTPUT_CONSOLE] = NULL,
+    [OUTPUT_JSON_FILE] = NULL,
+    [OUTPUT_JSON_UDP] = NULL,
+    [OUTPUT_FTRACE] = output_ftrace_itm_event,
     [OUTPUT_DISABLED] = NULL
 };
 
@@ -210,5 +219,19 @@ void output_thread_switch(OutputConfig *config, struct rtosThread *prev, struct 
     if (handler)
     {
         handler(config, prev, next, timestamp_us);
+    }
+}
+
+void output_itm_event(OutputConfig *config, ItmEventOutput *event, uint64_t timestamp)
+{
+    if (!config || config->mode == OUTPUT_DISABLED || config->mode >= sizeof(itm_event_handlers)/sizeof(itm_event_handlers[0]))
+    {
+        return;
+    }
+
+    itm_event_fn handler = itm_event_handlers[config->mode];
+    if (handler)
+    {
+        handler(config, event, timestamp);
     }
 }

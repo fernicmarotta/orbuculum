@@ -8,6 +8,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+/* Buffer for composite thread name "name|entry_func" in ftrace output */
+#define FTRACE_THREAD_NAME_LEN (RTOS_THREAD_NAME_MAX_LEN * 2)
+
 static uint64_t base_timestamp_us = 0;
 static bool first_switch = true;
 static int cpu_id = 0;
@@ -83,8 +86,8 @@ void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, 
     int n_prio = next->priority;
     unsigned n_pid = (unsigned)(uint32_t)n_tcb;
 
-    char p_name[128];
-    char n_name[128];
+    char p_name[FTRACE_THREAD_NAME_LEN];
+    char n_name[FTRACE_THREAD_NAME_LEN];
 
     if (p_entry && p_entry[0])
         snprintf(p_name, sizeof(p_name), "%s|%s", p_base, p_entry);
@@ -106,6 +109,25 @@ void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, 
 }
 
 
+
+void output_ftrace_itm_event(OutputConfig *config, ItmEventOutput *event, uint64_t timestamp)
+{
+    if (!config || !config->file || !event || !event->tag_name)
+        return;
+
+    /* Skip if no sched_switch header written yet */
+    if (first_switch)
+        return;
+
+    double t = (timestamp - base_timestamp_us) / 1000000.0;
+
+    fprintf(config->file,
+            "%16s-0 [%03d] .... %12.6f: tracing_mark_write: C|0|%s|%u\n",
+            "<...>", cpu_id, t,
+            event->tag_name, event->value);
+
+    fflush(config->file);
+}
 
 void output_ftrace_profile_entry(OutputConfig *config, ProfileOutput *entry)
 {

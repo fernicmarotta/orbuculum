@@ -71,8 +71,16 @@ void output_stats(OutputConfig *config, StatsOutput *stats);
 void output_rtos_info(OutputConfig *config, void *rtos_data);
 void output_end_frame(OutputConfig *config);
 
+typedef struct {
+    uint8_t channel;
+    const char *tag_name;
+    uint32_t value;
+    uint8_t len;
+} ItmEventOutput;
+
 struct rtosThread;
 void output_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us);
+void output_itm_event(OutputConfig *config, ItmEventOutput *event, uint64_t timestamp);
 
 void output_clear_screen(OutputConfig *config);
 void output_status_line(OutputConfig *config, const char *format, ...);
