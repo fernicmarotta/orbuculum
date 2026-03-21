@@ -324,48 +324,42 @@ The slice color encodes the **end state** of that execution period:
 
 Click a slice to see details including "End State", priority, and duration.
 
-### RTX5 Example -- sched_switch only
-
-![RTX5 overview](perfetto_rtx5_overview.png)
-
-Full trace overview: ~20 threads, context switches only (`prev_state=R` and `S`).
-No object tracking (no `-w` option).
-
-![RTX5 zoomed](perfetto_rtx5_zoomed.png)
-
-Zoomed view with detail panel showing "End State: Runnable", Priority 1,
-Duration 443ms.
-
 ### FreeRTOS Example -- sched_switch + object tracking + ITM
+
+![FreeRTOS overview](perfetto_freertos_overview.png)
+
+Full trace overview: CPU scheduling track, 20+ object counter tracks under
+Process 1 (`mutex:TestMutex`, `queue:*`, `rmutex:*`, `sem:*`), and thread
+swim lanes below. Named objects use `vQueueAddToRegistry()` names.
 
 ![FreeRTOS object counter tracks](perfetto_freertos_zoomed_40ms.png)
 
-**Process 1** counter tracks showing object blocking events at 614s:
-`mutex:TestMutex` and `sem:TestBSem` show value=1 (purple bar) during blocking.
-Named objects use `vQueueAddToRegistry()` names.
+Zoomed view (~3 min window) showing object blocking events. Counter tracks
+show value=1 (purple bar) during blocking: `mutex:TestMutex` with periodic
+contention, `sem:0x24009788` with long blocking periods, and `queue:0x24010EC8`
+with rapid acquire/release cycles.
 
 ![FreeRTOS thread swim lanes](perfetto_freertos_threads_40ms.png)
 
-Thread swim lanes at the same timestamp.  Threads show different colors:
-`mutexB` (blue = Runnable), `mutexA` (gray = Sleeping),
-`semWait` (purple = Uninterruptible Sleep / blocked on sem).
+Thread swim lanes at the same zoom level. `sem:TestBSem` and `sem:TestSem`
+counter tracks visible above, with `mutexA|task_mutex_a` (dense gray = nearly
+always running), `autotestTask` (teal), `mutexB|task_mutex_b` (blue, intermittent).
 
-![FreeRTOS D-state detail](perfetto_freertos_dstate_selected.png)
+![FreeRTOS CPU Sched Slice detail](perfetto_freertos_dstate_selected.png)
 
-Detail panel for a D-state slice: **End State: Uninterruptible Sleep**,
-Thread `mutexB|task_mutex_b`, Priority 24, Duration 6ms 574us.
-The CPU scheduling row shows the full context switch sequence.
+Detail panel for a CPU Sched Slice: Thread `mutexA|task_mutex_a [604019640]`,
+Priority 24 (real-time), Duration 461ms, End State shown. Click any scheduling
+slice to inspect its process, thread, timing, and end state.
 
 ### Zephyr Example -- sched_switch + object tracking
 
-![Zephyr D-state with objects](perfetto_zephyr_dstate.png)
+![Zephyr object tracking](perfetto_zephyr_dstate.png)
 
-All five Zephyr object types visible under Process 1:
-`mutex:0x24000090`, `sem:0x240000E8`, `sem:0x240000FC`,
-`msgqueue:0x240000A8`, `evtflags:0x24000DC8`.
-All names are hex addresses (Zephyr objects have no name fields).
-Detail panel: `bsem_tid|task_bsem_consumer`, End State: Uninterruptible Sleep,
-Priority 5, Duration 5ms 582us.
+Zephyr trace (~3s window) with all four object types under Process 1:
+`mutex:0x24000090` (dense contention), `sem:0x240000E8`, `evtflags:0x24000DC8`,
+`msgqueue:0x240000A8`. All names are hex addresses (Zephyr objects have no name
+fields). Thread swim lanes show `mutex_a_tid`, `mutex_b_tid` (very active),
+`producer_tid`, `msgq_tid`, `event_tid`, `bsem_tid`, `sem_tid`.
 
 ### Counter Track Groups
 
