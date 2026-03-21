@@ -10,8 +10,13 @@
 
 static uint64_t base_timestamp_us = 0;
 static bool first_switch = true;
-static struct rtosThread *last_thread = NULL;
 static int cpu_id = 0;
+
+void output_ftrace_reset(void)
+{
+    base_timestamp_us = 0;
+    first_switch = true;
+}
 
 void output_ftrace_start_frame(OutputConfig *config, IntervalOutput *interval)
 {
@@ -98,8 +103,6 @@ void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, 
             n_name, n_pid, n_prio);
 
     fflush(config->file);
-
-    last_thread = next;
 }
 
 

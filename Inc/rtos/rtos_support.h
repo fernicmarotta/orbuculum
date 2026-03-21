@@ -12,13 +12,28 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#include <string.h>
 #include "uthash.h"
 
 /* RTOS Thread Entry */
+#define RTOS_THREAD_NAME_MAX_LEN 64
+
+/* Unknown name constants - use these instead of hardcoded strings */
+#define RTOS_NAME_UNKNOWN    "UNNAMED"
+#define RTOS_NAME_NO_NAME    "No Name"
+
+/* Check if thread name is unknown/unresolved */
+static inline bool rtos_name_is_unknown(const char *name)
+{
+    return (!name || name[0] == '\0' ||
+            strcmp(name, RTOS_NAME_UNKNOWN) == 0 ||
+            strcmp(name, RTOS_NAME_NO_NAME) == 0);
+}
+
 struct rtosThread {
     /* Thread identification */
     uint32_t tcb_addr;              /* Thread control block address (key) */
-    char name[64];                  /* Thread name (from memory or "UNNAMED") */
+    char name[RTOS_THREAD_NAME_MAX_LEN]; /* Thread name (from memory or "UNNAMED") */
     uint32_t entry_func;            /* Thread entry function address */
     const char *entry_func_name;    /* Thread entry function name from symbols */
     int8_t priority;                /* Thread priority (signed for RTX5) */
@@ -44,7 +59,6 @@ enum rtosType {
     RTOS_NONE = 0,
     RTOS_RTX5,
     RTOS_FREERTOS,
-    RTOS_THREADX,
     RTOS_UNKNOWN
 };
 
@@ -90,6 +104,9 @@ struct rtosOps {
     
     /* Verify RTOS version match between ELF and target (optional) */
     int (*verify_target_match)(struct rtosState *rtos, struct SymbolSet *symbols);
+
+    /* Get address to watch for context switches (for DWT configuration) */
+    uint32_t (*get_watchpoint_addr)(struct rtosState *rtos);
 };
 
 /* RTOS State */

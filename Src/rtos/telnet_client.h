@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+void telnet_set_connection_params(const char *host, int port);
 int telnet_connect(int port);
 void telnet_disconnect(void);
 bool telnet_is_connected(void);

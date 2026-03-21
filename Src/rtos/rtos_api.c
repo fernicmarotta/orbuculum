@@ -5,17 +5,41 @@
 #include "generics.h"
 #include "symbols.h"
 #include "rtos_support.h"
-#include <rtos/rtx5.h>
+#include <rtos/rtx5/rtx5.h>
+#include <rtos/freertos/freertos.h>
 #include <output_handler.h>
 #include "uthash.h"
 
 
-struct rtx5_private {
-    uint32_t osRtxInfo;
-    uint32_t thread_run_curr;
-    uint32_t pendSV_Handler;
-    uint32_t osRtxThreadListPut;
+/* -------------------------------------------------------------------------
+ * RTOS Registry - extensible list of supported RTOS types
+ * ------------------------------------------------------------------------- */
+
+struct rtosRegistry {
+    const char *name;
+    const char *alias;
+    enum rtosType type;
+    const struct rtosOps *(*getOps)(void);
 };
+
+static const struct rtosRegistry rtos_registry[] = {
+    { "rtx5",     "rtxv5",    RTOS_RTX5,     rtx5GetOps     },
+    { "freertos", "FreeRTOS", RTOS_FREERTOS, freertosGetOps },
+    { NULL, NULL, RTOS_NONE, NULL }
+};
+
+
+static const struct rtosRegistry *find_rtos_by_name(const char *name)
+{
+    for (const struct rtosRegistry *r = rtos_registry; r->name; r++)
+    {
+        if (strcasecmp(name, r->name) == 0 ||
+            (r->alias && strcasecmp(name, r->alias) == 0))
+            return r;
+    }
+    return NULL;
+}
+
 
 /* Hash for unresolved function addresses */
 struct unresolvedFunc {
@@ -86,91 +110,69 @@ static int switches_sort_desc(void *a, void *b)
     return 0;
 }
 
-/* Helper function to find osRtxInfo address from ELF file */
-static uint32_t findOsRtxInfoAddress(const char *elfFile)
-{
-    if (!elfFile) return 0;
-    
-    char cmd[512];
-    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep 'osRtxInfo$'", elfFile);
-    
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return 0;
-    
-    char line[256];
-    uint32_t address = 0;
-    
-    if (fgets(line, sizeof(line), fp)) {
-        /* Parse line like: "20004000 g     O RW_KERNEL	000000a4 .hidden osRtxInfo" */
-        char *endptr;
-        address = strtoul(line, &endptr, 16);
-        if (endptr == line) address = 0; /* Conversion failed */
-    }
-    
-    pclose(fp);
-    return address;
-}
 
-
-/* Initialize RTOS tracking */
-struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *requested_type, int options_telnetPort, uint32_t cpu_freq)
+struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *requested_type,
+                                    int options_telnetPort, uint32_t cpu_freq)
 {
-    if (!requested_type) return NULL;
-    
-    struct rtosState *rtos = calloc(1, sizeof(struct rtosState));
-    if (!rtos) return NULL;
-    
-    rtos->cpu_freq = cpu_freq;
-    rtos->telnet_port = options_telnetPort;
-    
-    if (strcasecmp(requested_type, "rtx5") == 0 || 
-        strcasecmp(requested_type, "rtxv5") == 0) {
-        rtos->type = RTOS_RTX5;
-        rtos->name = "RTX5";
-        rtos->ops = rtx5GetOps();
-        
-        if (rtos->ops && rtos->ops->init) {
-            if (rtos->ops->init(rtos, symbols) < 0) {
-                genericsReport(V_ERROR, "Failed to initialize RTX5" EOL);
-                free(rtos);
-                return NULL;
-            }
-        }
-        
-        /* Verify target match if telnet is configured */
-        if (rtos->ops && rtos->ops->verify_target_match && options_telnetPort > 0) {
-            int verify_result = rtos->ops->verify_target_match(rtos, symbols);
-            if (verify_result == RTOS_VERIFY_MISMATCH) {
-                /* Only exit on real mismatch */
-                free(rtos);
-                return NULL;
-            } else if (verify_result == RTOS_VERIFY_NO_CONNECTION) {
-                genericsReport(V_INFO, "RTOS verification pending - telnet not ready yet" EOL);
-            }
-        }
-        
-        /* Initialize timing for first thread detection */
-        rtos->last_switch_time = genericsTimestampuS();
-        
-        if (rtos->priv) {
-            struct rtx5_private *priv = (struct rtx5_private*)rtos->priv;
-            if (priv->thread_run_curr && options_telnetPort > 0) {
-                genericsReport(V_INFO, "Configuring DWT for address 0x%08X via telnet" EOL, priv->thread_run_curr);
-                rtosConfigureDWT(priv->thread_run_curr);
-            } else if (options_telnetPort <= 0) {
-                genericsReport(V_WARN, "Telnet not configured, DWT not auto-configured" EOL);
-            }
-        }
-        
-        rtos->enabled = true;
-    } else {
+    if (!requested_type)
+        return NULL;
+
+    const struct rtosRegistry *reg = find_rtos_by_name(requested_type);
+    if (!reg)
+    {
         genericsReport(V_ERROR, "Unknown RTOS type: %s" EOL, requested_type);
-        free(rtos);
+        genericsReport(V_ERROR, "Supported: rtx5, freertos" EOL);
         return NULL;
     }
-    
+
+    struct rtosState *rtos = calloc(1, sizeof(struct rtosState));
+    if (!rtos)
+        return NULL;
+
+    rtos->type = reg->type;
+    rtos->name = reg->name;
+    rtos->ops = reg->getOps();
+    rtos->cpu_freq = cpu_freq;
+    rtos->telnet_port = options_telnetPort;
+
+    if (rtos->ops && rtos->ops->init)
+    {
+        if (rtos->ops->init(rtos, symbols) < 0)
+        {
+            genericsReport(V_ERROR, "Failed to initialize %s" EOL, rtos->name);
+            if (rtos->ops->cleanup)
+                rtos->ops->cleanup(rtos);
+            free(rtos);
+            return NULL;
+        }
+    }
+
+    if (rtos->ops && rtos->ops->verify_target_match && options_telnetPort > 0)
+    {
+        int result = rtos->ops->verify_target_match(rtos, symbols);
+        if (result == RTOS_VERIFY_MISMATCH)
+        {
+            if (rtos->ops->cleanup)
+                rtos->ops->cleanup(rtos);
+            free(rtos);
+            return NULL;
+        }
+    }
+
+    if (rtos->ops && rtos->ops->get_watchpoint_addr && options_telnetPort > 0)
+    {
+        uint32_t wp_addr = rtos->ops->get_watchpoint_addr(rtos);
+        if (wp_addr)
+        {
+            genericsReport(V_INFO, "Configuring DWT watchpoint at 0x%08X" EOL, wp_addr);
+            rtosConfigureDWT(wp_addr);
+        }
+    }
+
+    rtos->enabled = true;
     return rtos;
 }
+
 
 void rtosFree(struct rtosState *rtos)
 {
@@ -209,27 +211,19 @@ const char *rtosLookupPointerAsString(struct SymbolSet *symbols, uint32_t ptr_va
 const char *rtosLookupPointerAsFunction(struct SymbolSet *symbols, uint32_t ptr_value)
 {
     if (!symbols || !ptr_value || ptr_value == 0xFFFFFFFF) return NULL;
-    // Intentar con &~1 (limpiar Thumb)
+    
     const char *name = rtosLookupPointerAsString(symbols, ptr_value & ~1);
     if (name) return name;
-    // Try with original address
+    
     name = rtosLookupPointerAsString(symbols, ptr_value);
     if (name) return name;
-    // Try with address -1 (in case Thumb is at +1)
+    
     if (ptr_value > 0) {
         name = rtosLookupPointerAsString(symbols, ptr_value - 1);
         if (name) return name;
     }
-    // Symbol not found
-    struct unresolvedFunc *uf;
-    HASH_FIND_INT(unresolvedFuncs, &ptr_value, uf);
-    if (!uf) {
-        uf = malloc(sizeof(struct unresolvedFunc));
-        uf->addr = ptr_value;
-        HASH_ADD_INT(unresolvedFuncs, addr, uf);
-        genericsReport(V_WARN, "No symbol found for function at 0x%08X" EOL, ptr_value);
-    }
-    return "Unknown Function";
+    
+    return NULL;
 }
 
 /* Resolve thread info from pointers */
@@ -261,230 +255,165 @@ bool rtosResolveThreadInfo(struct rtosThread *thread, struct SymbolSet *symbols,
     return resolved;
 }
 
-static const char* rtosGetThreadName(struct rtosState *rtos, uint32_t tcb_addr)
+
+/* -------------------------------------------------------------------------
+ * DWT Match Handlers - Context Switch Detection
+ * ------------------------------------------------------------------------- */
+
+static struct rtosThread *find_or_create_thread(struct rtosState *rtos, struct SymbolSet *symbols,
+                                                 uint32_t tcb_addr, int telnet_port)
 {
-    if (!rtos || !tcb_addr) return "NULL";
     struct rtosThread *thread;
     HASH_FIND_INT(rtos->threads, &tcb_addr, thread);
-    return thread ? thread->name : "UNKNOWN";
+
+    if (thread)
+    {
+        /* Retry reading info if name is still unknown */
+        if (telnet_port > 0 && rtos->ops && rtos->ops->read_thread_info &&
+            rtos_name_is_unknown(thread->name))
+        {
+            rtos->ops->read_thread_info(rtos, symbols, thread, tcb_addr);
+        }
+        return thread;
+    }
+
+    thread = calloc(1, sizeof(struct rtosThread));
+    if (!thread)
+        return NULL;
+
+    thread->tcb_addr = tcb_addr;
+    HASH_ADD_INT(rtos->threads, tcb_addr, thread);
+    rtos->thread_count++;
+
+    if (telnet_port > 0 && rtos->ops && rtos->ops->read_thread_info)
+    {
+        int result = rtos->ops->read_thread_info(rtos, symbols, thread, tcb_addr);
+        if (result < 0)
+        {
+            HASH_DEL(rtos->threads, thread);
+            rtos->thread_count--;
+            free(thread);
+            return NULL;
+        }
+        if (result > 0)
+            rtosClearMemoryCacheForTCB(tcb_addr);
+    }
+    else
+    {
+        strcpy(thread->name, RTOS_NAME_UNKNOWN);
+    }
+
+    return thread;
 }
 
-/* Handle DWT match with ITM timestamp */
-void rtosHandleDWTMatchWithTimestamp(struct rtosState *rtos, struct SymbolSet *symbols,
-                       uint32_t comp_num, uint32_t address, uint32_t value, 
-                       uint64_t itm_timestamp, int options_telnetPort)
+
+static void account_prev_thread_time_cycles(struct rtosState *rtos, uint32_t current_cyccnt)
 {
-    if (!rtos || !rtos->enabled) return;
-    
-    /* ITM timestamps come from CYCCNT which is 32-bit, handle as 32-bit to detect wraparound */
-    uint32_t current_cyccnt = (uint32_t)(itm_timestamp & 0xFFFFFFFF);
-    
-    struct rtosThread *thread;
-    HASH_FIND_INT(rtos->threads, &value, thread);
-    
-    if (!thread) {
-        thread = calloc(1, sizeof(struct rtosThread));
-        if (!thread) return;
-        thread->tcb_addr = value;
-        HASH_ADD_INT(rtos->threads, tcb_addr, thread);
-        rtos->thread_count++;
-        
-        if (options_telnetPort > 0) {
-            int read_result = 0;
-            if (rtos->ops && rtos->ops->read_thread_info) {
-                read_result = rtos->ops->read_thread_info(rtos, symbols, thread, value);
-            } else {
-                strcpy(thread->name, "UNKNOWN");
-                thread->priority = 0;
-            }
-            
-            if (read_result < 0) {
-                genericsReport(V_DEBUG, "Failed to read thread info for TCB=0x%08X - removing from tracking\n", value);
-                HASH_DEL(rtos->threads, thread);
-                free(thread);
-                return;
-            } else if (read_result > 0) {
-                genericsReport(V_INFO, "Thread reuse detected for TCB=0x%08X - clearing cache\n", value);
-                rtosClearMemoryCacheForTCB(value);
-            }
-            
-            genericsReport(V_INFO, "New thread detected: TCB=0x%08X, Name='%s', Func=0x%08X/%s, Prio=%d\n", 
-                thread->tcb_addr, thread->name, thread->entry_func, 
-                thread->entry_func_name ? thread->entry_func_name : "-", thread->priority);
-        } else {
-            strcpy(thread->name, "UNNAMED");
-            thread->priority = 0;
-        }
-    }
-    
-    if (rtos->current_thread) {
-        struct rtosThread *prev_thread;
-        uint32_t prev_tcb = rtos->current_thread;
-        HASH_FIND_INT(rtos->threads, &prev_tcb, prev_thread);
-        if (prev_thread && rtos->last_cyccnt != 0) {
-            /* Calculate delta handling 32-bit wraparound */
-            uint32_t delta_cycles;
-            if (current_cyccnt >= rtos->last_cyccnt) {
-                /* Normal case: no wraparound */
-                delta_cycles = current_cyccnt - rtos->last_cyccnt;
-            } else {
-                /* Wraparound occurred */
-                delta_cycles = (0xFFFFFFFF - rtos->last_cyccnt) + current_cyccnt + 1;
-            }
-            
-            if (delta_cycles > 0 && delta_cycles < 0x80000000) {
-                uint32_t delta_time_us = rtos->cpu_freq > 0 ? delta_cycles / (rtos->cpu_freq / 1000000) : 0;
-                
-                if (delta_time_us > 10000) {
-                    genericsReport(V_INFO, "Long timeslice: %u us (%u cycles) for TCB=0x%08X (%s)\n", 
-                        delta_time_us, delta_cycles, prev_thread->tcb_addr, prev_thread->name);
-                }
-                
-                prev_thread->accumulated_time_us += delta_time_us;
-                prev_thread->accumulated_cycles += delta_cycles;
-                genericsReport(V_DEBUG, "Thread TCB=0x%08X ran for %u us, total=%" PRIu64 " us\n", 
-                    prev_thread->tcb_addr, delta_time_us, prev_thread->accumulated_time_us);
-            }
-        }
-    }
-    
-    thread->last_scheduled_us = current_cyccnt;  /* Store current CYCCNT value */
-    
-    if (rtos->current_thread != value) {
-        /* Only count as a context switch if it's actually a different thread */
-        thread->context_switches++;
-        thread->window_switches++;
-        
-        struct rtosThread *prev_thread = NULL;
-        if (rtos->current_thread) {
-            HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev_thread);
-        }
-        
-        genericsReport(V_DEBUG, "Context switch: 0x%08X (%s) → 0x%08X (%s)\n", 
-            rtos->current_thread, 
-            rtos->current_thread ? rtosGetThreadName(rtos, rtos->current_thread) : "NULL",
-            thread->tcb_addr, thread->name);
-        
-        if (rtos->output_config) {
-            genericsReport(V_DEBUG, "Calling output_thread_switch with output_config=%p\n", rtos->output_config);
-            output_thread_switch((OutputConfig *)rtos->output_config, prev_thread, thread, itm_timestamp);
-        } else {
-            genericsReport(V_DEBUG, "No output_config set for RTOS, skipping thread_switch output\n");
-        }
-        
-        rtos->current_thread = value;
-        /* Update last CYCCNT for the new thread */
-        rtos->last_cyccnt = current_cyccnt;
-    } else if (current_cyccnt != rtos->last_cyccnt) {
-        /* Same thread but new timestamp - update for accurate timing */
-        rtos->last_cyccnt = current_cyccnt;
+    if (!rtos->current_thread || rtos->last_cyccnt == 0)
+        return;
+
+    struct rtosThread *prev;
+    HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev);
+    if (!prev)
+        return;
+
+    uint32_t delta = (current_cyccnt >= rtos->last_cyccnt)
+        ? current_cyccnt - rtos->last_cyccnt
+        : (0xFFFFFFFF - rtos->last_cyccnt) + current_cyccnt + 1;
+
+    if (delta > 0 && delta < 0x80000000 && rtos->cpu_freq > 0)
+    {
+        uint32_t delta_us = delta / (rtos->cpu_freq / 1000000);
+        prev->accumulated_time_us += delta_us;
+        prev->accumulated_cycles += delta;
     }
 }
 
-/* Handle DWT match - legacy function that uses system time */
-void rtosHandleDWTMatch(struct rtosState *rtos, struct SymbolSet *symbols,
-                       uint32_t comp_num, uint32_t address, uint32_t value, int options_telnetPort)
+
+static void account_prev_thread_time_us(struct rtosState *rtos, uint64_t current_time_us)
 {
-    /* Handle thread switch from DWT watchpoint */
-    if (!rtos || !rtos->enabled) return;
-    
-    /* Get current timestamp in microseconds */
-    uint64_t current_time_us = genericsTimestampuS();
-    
-    /* Value is the thread TCB address that just became active */
-    struct rtosThread *thread;
-    HASH_FIND_INT(rtos->threads, &value, thread);
-    
-    if (!thread) {
-        /* New thread - create and read memory info ONLY ONCE */
-        thread = calloc(1, sizeof(struct rtosThread));
-        if (!thread) return;
-        thread->tcb_addr = value;
-        HASH_ADD_INT(rtos->threads, tcb_addr, thread);
-        rtos->thread_count++;
-        
-        /* ONLY read memory for NEW threads */
-        if (options_telnetPort > 0) {
-            /* Delegate to specific RTOS to read thread details */
-            int read_result = 0;
-            if (rtos->ops && rtos->ops->read_thread_info) {
-                read_result = rtos->ops->read_thread_info(rtos, symbols, thread, value);
-            } else {
-                /* Generic fallback if no specific handler */
-                strcpy(thread->name, "UNKNOWN");
-                thread->priority = 0;
-            }
-            
-            /* Check read result */
-            if (read_result < 0) {
-                /* Read failed - remove the thread from hash as it's invalid */
-                genericsReport(V_WARN, "Failed to read thread info for TCB=0x%08X - removing from tracking\n", value);
-                HASH_DEL(rtos->threads, thread);
-                free(thread);
-                return;
-            } else if (read_result > 0) {
-                /* Thread was reused - clear cache for this TCB */
-                genericsReport(V_INFO, "Thread reuse detected for TCB=0x%08X - clearing cache\n", value);
-                rtosClearMemoryCacheForTCB(value);
-            }
-            
-            genericsReport(V_INFO, "New thread detected: TCB=0x%08X, Name='%s', Func=0x%08X/%s, Prio=%d\n", 
-                thread->tcb_addr, thread->name, thread->entry_func, 
-                thread->entry_func_name ? thread->entry_func_name : "-", thread->priority);
-        } else {
-            strcpy(thread->name, "UNNAMED");
-            thread->priority = 0;
-        }
-    }
-    
-    if (rtos->current_thread && rtos->last_switch_time > 0) {
-        struct rtosThread *prev_thread;
-        uint32_t prev_tcb = rtos->current_thread;
-        HASH_FIND_INT(rtos->threads, &prev_tcb, prev_thread);
-        if (prev_thread) {
-            uint64_t delta_time_us = current_time_us - rtos->last_switch_time;
-            
-            if (delta_time_us > 10000) {
-                genericsReport(V_INFO, "Long timeslice: %" PRIu64 " us for TCB=0x%08X (%s)\n", 
-                    delta_time_us, prev_thread->tcb_addr, prev_thread->name);
-            }
-            
-            prev_thread->accumulated_time_us += delta_time_us;
-            genericsReport(V_DEBUG, "Thread TCB=0x%08X ran for %" PRIu64 " us, total=%" PRIu64 " us\n", 
-                prev_thread->tcb_addr, delta_time_us, prev_thread->accumulated_time_us);
-        }
-    }
-    
-    thread->last_scheduled_us = current_time_us;
+    if (!rtos->current_thread || rtos->last_switch_time == 0)
+        return;
+
+    struct rtosThread *prev;
+    HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev);
+    if (!prev)
+        return;
+
+    uint64_t delta = current_time_us - rtos->last_switch_time;
+    prev->accumulated_time_us += delta;
+}
+
+
+static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thread,
+                                   uint64_t timestamp)
+{
+    if (rtos->current_thread == thread->tcb_addr)
+        return;
+
     thread->context_switches++;
     thread->window_switches++;
-    
-    if (rtos->current_thread != value) {
-        struct rtosThread *prev_thread = NULL;
-        if (rtos->current_thread) {
-            HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev_thread);
-        }
-        
-        genericsReport(V_DEBUG, "Context switch: 0x%08X (%s) → 0x%08X (%s)\n", 
-            rtos->current_thread, 
-            rtos->current_thread ? rtosGetThreadName(rtos, rtos->current_thread) : "NULL",
-            thread->tcb_addr, thread->name);
-        
-        if (rtos->output_config) {
-            output_thread_switch((OutputConfig *)rtos->output_config, prev_thread, thread, current_time_us);
-        }
-    }
-    
-    rtos->current_thread = value;
+
+    struct rtosThread *prev = NULL;
+    if (rtos->current_thread)
+        HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev);
+
+    if (rtos->output_config)
+        output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, timestamp);
+
+    rtos->current_thread = thread->tcb_addr;
+}
+
+
+void rtosHandleDWTMatchWithTimestamp(struct rtosState *rtos, struct SymbolSet *symbols,
+                                     uint32_t comp_num, uint32_t address, uint32_t value,
+                                     uint64_t itm_timestamp, int options_telnetPort)
+{
+    if (!rtos || !rtos->enabled)
+        return;
+
+    uint32_t current_cyccnt = (uint32_t)(itm_timestamp & 0xFFFFFFFF);
+
+    struct rtosThread *thread = find_or_create_thread(rtos, symbols, value, options_telnetPort);
+    if (!thread)
+        return;
+
+    account_prev_thread_time_cycles(rtos, current_cyccnt);
+    handle_context_switch(rtos, thread, itm_timestamp);
+
+    thread->last_scheduled_us = current_cyccnt;
+    rtos->last_cyccnt = current_cyccnt;
+}
+
+
+void rtosHandleDWTMatch(struct rtosState *rtos, struct SymbolSet *symbols,
+                        uint32_t comp_num, uint32_t address, uint32_t value,
+                        int options_telnetPort)
+{
+    if (!rtos || !rtos->enabled)
+        return;
+
+    uint64_t current_time_us = genericsTimestampuS();
+
+    struct rtosThread *thread = find_or_create_thread(rtos, symbols, value, options_telnetPort);
+    if (!thread)
+        return;
+
+    account_prev_thread_time_us(rtos, current_time_us);
+    handle_context_switch(rtos, thread, current_time_us);
+
+    thread->last_scheduled_us = current_time_us;
     rtos->last_switch_time = current_time_us;
 }
 
-/* External sort method selection */
 
-/* Helper structure for column widths */
+/* -------------------------------------------------------------------------
+ * Table Output Helpers
+ * ------------------------------------------------------------------------- */
+
 struct ColumnWidths {
     int name;
-    int address;  /* Fixed at 10 for 0xXXXXXXXX */
+    int address;
     int function;
     int priority;
     int time;
@@ -493,7 +422,7 @@ struct ColumnWidths {
     int switches;
 };
 
-/* Print horizontal separator line for table */
+
 static void printTableSeparator(FILE *f, struct ColumnWidths *widths)
 {
     fprintf(f, "|");
@@ -515,15 +444,17 @@ static void printTableSeparator(FILE *f, struct ColumnWidths *widths)
     fprintf(f, "|\n");
 }
 
-/* Get function string for a thread */
+
 static void getThreadFunctionString(struct rtosThread *thread, char *buf, size_t bufsize)
 {
+    if (bufsize == 0) return;
+    
     if (thread->entry_func_name && thread->entry_func) {
         snprintf(buf, bufsize, "%s", thread->entry_func_name);
     } else if (thread->entry_func && thread->entry_func != 0xFFFFFFFF) {
         snprintf(buf, bufsize, "0x%08X", thread->entry_func);
     } else {
-        strcpy(buf, "-");
+        snprintf(buf, bufsize, "-");
     }
 }
 
@@ -554,8 +485,10 @@ static void calculateColumnWidths(struct rtosState *rtos, struct ColumnWidths *w
         len = strlen(func_str);
         if (len > widths->function) widths->function = len;
         
-        /* Priority name */
-        const char *pri_name = rtx5GetPriorityName(thread->priority);
+        /* Priority name - use RTOS-specific function */
+        const char *pri_name = (rtos->ops && rtos->ops->get_priority_name)
+            ? rtos->ops->get_priority_name(thread->priority)
+            : "Unknown";
         len = strlen(pri_name);
         if (len > widths->priority) widths->priority = len;
         
@@ -623,7 +556,9 @@ static void printThreadRow(FILE *f, struct ColumnWidths *widths, struct rtosThre
     /* Get thread info strings */
     char func_str[64];
     getThreadFunctionString(thread, func_str, sizeof(func_str));
-    const char *pri_name = rtx5GetPriorityName(thread->priority);
+    const char *pri_name = (rtos->ops && rtos->ops->get_priority_name)
+        ? rtos->ops->get_priority_name(thread->priority)
+        : "Unknown";
     
     if (rtos->cpu_freq == 0) {
         fprintf(f, "| %-*s | 0x%08X | %-*s | %-*s | %*s | %*.3f | %*.3f | %*" PRIu64 " |\n",
@@ -636,7 +571,9 @@ static void printThreadRow(FILE *f, struct ColumnWidths *widths, struct rtosThre
             widths->max, thread->max_cpu_percent / 100.0,
             widths->switches, thread->window_switches);
     } else {
-        uint64_t time_ms = (thread->accumulated_cycles * 1000) / rtos->cpu_freq;
+        uint64_t time_ms = thread->accumulated_cycles > 0 
+            ? (thread->accumulated_cycles * 1000) / rtos->cpu_freq
+            : thread->accumulated_time_us / 1000;
         fprintf(f, "| %-*s | 0x%08X | %-*s | %-*s | %*" PRIu64 " | %*.3f | %*.3f | %*" PRIu64 " |\n",
             widths->name, thread->name,
             thread->tcb_addr,
@@ -650,163 +587,136 @@ static void printThreadRow(FILE *f, struct ColumnWidths *widths, struct rtosThre
 }
 
 
-/* Dump thread info */
-void rtosDumpThreadInfo(struct rtosState *rtos, FILE *f, uint64_t window_time_us, bool itm_overflow, const char *sort_order)
+static void accountCurrentThreadTime(struct rtosState *rtos)
 {
-    if (!rtos || !rtos->threads || !f) return;
+    if (!rtos->current_thread || rtos->last_switch_time == 0 || rtos->last_cyccnt != 0)
+        return;
+
+    struct rtosThread *current;
+    HASH_FIND_INT(rtos->threads, &rtos->current_thread, current);
+    if (!current)
+        return;
+
+    uint64_t now = genericsTimestampuS();
+    current->accumulated_time_us += now - rtos->last_switch_time;
+    rtos->last_switch_time = now;
+}
+
+
+static void sortThreads(struct rtosState *rtos, const char *sort_order)
+{
+    typedef int (*SortFunc)(void *, void *);
     
+    struct { const char *name; SortFunc func; } sorters[] = {
+        { "cpu",      cpu_usage_sort_desc },
+        { "maxcpu",   max_cpu_sort_desc },
+        { "tcb",      tcb_addr_sort_asc },
+        { "name",     name_sort_asc },
+        { "func",     func_sort_asc },
+        { "priority", priority_sort_desc },
+        { "switches", switches_sort_desc },
+        { NULL, NULL }
+    };
+
+    SortFunc func = cpu_usage_sort_desc;
+    if (sort_order) {
+        for (int i = 0; sorters[i].name; i++) {
+            if (strcmp(sort_order, sorters[i].name) == 0) {
+                func = sorters[i].func;
+                break;
+            }
+        }
+    }
+    HASH_SORT(rtos->threads, func);
+}
+
+
+static void calculateCpuTotals(struct rtosState *rtos, bool has_idle,
+                                uint64_t *total_us, uint64_t *active_us)
+{
     struct rtosThread *thread, *tmp;
-    struct ColumnWidths widths;
-    
-    /* Check if RTOS has idle concept */
-    bool has_idle_concept = (rtos->ops && rtos->ops->is_idle_thread);
-    
-    /* Calculate dynamic column widths */
-    calculateColumnWidths(rtos, &widths);
-    
-    /* Print header */
-    fprintf(f, "\n=== RTOS Thread Statistics (%s) ===\n", rtos->name);
-    
-    /* Print table header */
-    printTableHeader(f, &widths);
-    
-    /* Print separator line */
-    printTableSeparator(f, &widths);
-    
-    /* FIRST: Account for the currently running thread's time since last switch */
-    /* NOTE: Skip this when using ITM timestamps as they're already accounted for in rtosHandleDWTMatchWithTimestamp */
-    if (rtos->current_thread && rtos->last_switch_time > 0 && rtos->last_cyccnt == 0) {
-        /* Only do final accounting if we're NOT using ITM timestamps (last_cyccnt would be > 0 if using ITM) */
-        struct rtosThread *current;
-        HASH_FIND_INT(rtos->threads, &rtos->current_thread, current);
-        if (current) {
-            uint64_t current_time_us = genericsTimestampuS();
-            uint64_t delta_time_us = current_time_us - rtos->last_switch_time;
-            current->accumulated_time_us += delta_time_us;
-            genericsReport(V_DEBUG, "Final accounting: Thread TCB=0x%08X ran for %" PRIu64 " us in window tail\n", 
-                current->tcb_addr, delta_time_us);
-            /* Update timestamp so we don't double-count in next window */
-            rtos->last_switch_time = current_time_us;
-        }
-    }
-    
-    uint64_t total_time_us = 0;
-    
-    /* Calculate total accumulated time (should equal window_time_us approximately) */
+    *total_us = 0;
+    *active_us = 0;
+    uint64_t total_cycles = 0;
+
     HASH_ITER(hh, rtos->threads, thread, tmp) {
-        total_time_us += thread->accumulated_time_us;
+        *total_us += thread->accumulated_time_us;
+        total_cycles += thread->accumulated_cycles;
+        if (!has_idle || !rtos->ops || !rtos->ops->is_idle_thread(thread))
+            *active_us += thread->accumulated_time_us;
     }
-    
-    /* If no time recorded yet, use window time for calculations */
-    if (total_time_us == 0) {
-        total_time_us = window_time_us;
-    }
-    
-    /* Sort threads based on selected method - update cpu_usage_sort to use accumulated_time_us */
-    if (!sort_order || strcmp(sort_order, "cpu") == 0) {
-        HASH_SORT(rtos->threads, cpu_usage_sort_desc);
-    } else if (strcmp(sort_order, "maxcpu") == 0) {
-        HASH_SORT(rtos->threads, max_cpu_sort_desc);
-    } else if (strcmp(sort_order, "tcb") == 0) {
-        HASH_SORT(rtos->threads, tcb_addr_sort_asc);
-    } else if (strcmp(sort_order, "name") == 0) {
-        HASH_SORT(rtos->threads, name_sort_asc);
-    } else if (strcmp(sort_order, "func") == 0) {
-        HASH_SORT(rtos->threads, func_sort_asc);
-    } else if (strcmp(sort_order, "priority") == 0) {
-        HASH_SORT(rtos->threads, priority_sort_desc);
-    } else if (strcmp(sort_order, "switches") == 0) {
-        HASH_SORT(rtos->threads, switches_sort_desc);
+    rtos->total_cycles = total_cycles;
+}
+
+
+static void printSummaryLine(FILE *f, struct rtosState *rtos, uint64_t window_us,
+                              uint64_t total_us, uint64_t active_us, bool has_idle, bool overflow)
+{
+    uint32_t pct = has_idle
+        ? (uint32_t)((active_us * 10000) / window_us)
+        : (uint32_t)((total_us * 10000) / window_us);
+    if (pct > 10000) pct = 10000;
+
+    if (has_idle) {
+        if (pct > rtos->max_cpu_usage) rtos->max_cpu_usage = pct;
+        fprintf(f, "Interval: %" PRIu64 " ms, CPU Usage: %.3f%%, Max: %.3f%%, CPU Freq: ",
+                window_us / 1000, pct / 100.0, rtos->max_cpu_usage / 100.0);
+        fprintf(f, rtos->cpu_freq > 0 ? "%uHz" : "NA", rtos->cpu_freq);
     } else {
-        /* Default to CPU usage */
-        HASH_SORT(rtos->threads, cpu_usage_sort_desc);
+        fprintf(f, "Window: %" PRIu64 " ms, Total CPU: %.3f%%", window_us / 1000, pct / 100.0);
     }
-    
-    /* Track idle thread separately */
+
+    uint32_t total_pct = (uint32_t)((total_us * 10000) / window_us);
+    if (overflow)
+        fprintf(f, " [ITM OVERFLOW DETECTED!]");
+    else if (total_pct < 9500)
+        fprintf(f, " [WARNING: Low total - possible lost DWT events]");
+    else if (total_pct > 10500)
+        fprintf(f, " [WARNING: High total - timing issue?]");
+    fprintf(f, "\n");
+}
+
+
+void rtosDumpThreadInfo(struct rtosState *rtos, FILE *f, uint64_t window_time_us,
+                        bool itm_overflow, const char *sort_order)
+{
+    if (!rtos || !rtos->threads || !f)
+        return;
+
+    bool has_idle = (rtos->ops && rtos->ops->is_idle_thread);
+    struct ColumnWidths widths;
+    uint64_t total_us, active_us;
+
+    accountCurrentThreadTime(rtos);
+    calculateCpuTotals(rtos, has_idle, &total_us, &active_us);
+    calculateColumnWidths(rtos, &widths);
+    sortThreads(rtos, sort_order);
+
+    fprintf(f, "\n=== RTOS Thread Statistics (%s) ===\n", rtos->name);
+    printTableHeader(f, &widths);
+    printTableSeparator(f, &widths);
+
+    struct rtosThread *thread, *tmp;
     struct rtosThread *idle_thread = NULL;
-    
-    /* Display each thread (except idle) */
+
     HASH_ITER(hh, rtos->threads, thread, tmp) {
-        /* Skip invalid TCBs */
-        if (thread->tcb_addr == 0x00000000 || thread->tcb_addr == 0xFFFFFFFF) {
-            genericsReport(V_DEBUG, "Skipping invalid TCB: 0x%08X\n", thread->tcb_addr);
+        if (thread->tcb_addr == 0 || thread->tcb_addr == 0xFFFFFFFF)
             continue;
-        }
-        
-        /* Skip idle thread if RTOS can identify it - save for later */
-        if (has_idle_concept && rtos->ops->is_idle_thread(thread)) {
+        if (has_idle && rtos->ops->is_idle_thread(thread)) {
             idle_thread = thread;
             continue;
         }
-        
-        /* Print regular thread row */
         printThreadRow(f, &widths, thread, rtos, window_time_us);
     }
-    
-    /* Print separator before idle thread if present */
+
     if (idle_thread) {
         printTableSeparator(f, &widths);
         printThreadRow(f, &widths, idle_thread, rtos, window_time_us);
     }
-    
-    /* Calculate CPU percentages */
-    uint64_t total_accum_us = 0;
-    uint64_t active_accum_us = 0;
-    uint64_t total_cycles = 0;
-    uint64_t active_cycles = 0;
-    
-    HASH_ITER(hh, rtos->threads, thread, tmp) {
-        total_accum_us += thread->accumulated_time_us;
-        total_cycles += thread->accumulated_cycles;
-        
-        /* If RTOS can identify idle threads, calculate active CPU separately */
-        if (has_idle_concept && !rtos->ops->is_idle_thread(thread)) {
-            active_accum_us += thread->accumulated_time_us;
-            active_cycles += thread->accumulated_cycles;
-        }
-    }
-    
-    /* Store total cycles for percentage calculation */
-    rtos->total_cycles = total_cycles;
-    
+
     if (window_time_us > 0) {
-        uint32_t display_pct;
         printTableSeparator(f, &widths);
-        
-        if (has_idle_concept) {
-            /* Show active CPU (non-idle threads only) */
-            display_pct = (active_accum_us * 10000) / window_time_us;
-            
-            /* Update max CPU usage if needed */
-            if (display_pct > rtos->max_cpu_usage) {
-                rtos->max_cpu_usage = display_pct;
-            }
-            
-            fprintf(f, "Interval: %" PRIu64 " ms, CPU Usage: %.3f%%,  Max: %.3f%%, CPU Freq: ",
-                window_time_us/1000, display_pct / 100.0, rtos->max_cpu_usage / 100.0);
-            if (rtos->cpu_freq > 0) {
-                fprintf(f, "%uHz", rtos->cpu_freq);
-            } else {
-                fprintf(f, "NA");
-            }
-        } else {
-            /* Show total for RTOS without idle concept */
-            display_pct = (total_accum_us * 10000) / window_time_us;
-            fprintf(f, "Window: %" PRIu64 " ms, Total CPU: %.3f%%", 
-                window_time_us/1000, display_pct / 100.0);
-        }
-        
-        /* Show warning based on ITM overflow or percentage */
-        /* For warnings, always use total (should be ~100%) */
-        uint32_t total_pct = (total_accum_us * 10000) / window_time_us;
-        if (itm_overflow) {
-            fprintf(f, " [ITM OVERFLOW DETECTED!]");
-        } else if (total_pct < 9500) {
-            fprintf(f, " [WARNING: Low total - possible lost DWT events]");
-        } else if (total_pct > 10500) {
-            fprintf(f, " [WARNING: High total - timing issue?]");
-        }
-        fprintf(f, "\n");
+        printSummaryLine(f, rtos, window_time_us, total_us, active_us, has_idle, itm_overflow);
     }
 }
 
@@ -884,4 +794,8 @@ void rtosResetThreadCounters(struct rtosState *rtos)
         thread->accumulated_cycles = 0;
         thread->window_switches = 0;
     }
+    
+    /* Reset timing base to avoid carryover from previous window */
+    rtos->last_switch_time = genericsTimestampuS();
+    rtos->last_cyccnt = 0;
 }

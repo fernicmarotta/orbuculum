@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -18,20 +19,20 @@ static cJSON *json_exception_array = NULL;
 
 static void send_udp_json(OutputConfig *config, const char *json_str) 
 {
-    if (config->udp_socket >= 0 && config->udp_dest && json_str) 
+    if (!config || config->udp_socket < 0 || !config->udp_dest || !json_str)
+        return;
+    
+    int result = sendto(config->udp_socket, json_str, strlen(json_str), 0,
+                       (struct sockaddr *)config->udp_dest, sizeof(struct sockaddr_in));
+    if (result < 0)
     {
-        int result = sendto(config->udp_socket, json_str, strlen(json_str), 0,
-                           (struct sockaddr *)config->udp_dest, sizeof(struct sockaddr_in));
-        if (result < 0)
-        {
-            genericsReport(V_ERROR, "UDP send failed: %s" EOL, strerror(errno));
-        }
+        genericsReport(V_ERROR, "UDP send failed: %s" EOL, strerror(errno));
     }
 }
 
 static void output_json_object(OutputConfig *config, cJSON *obj) 
 {
-    if (!obj) 
+    if (!config || !obj) 
         return;
     
     char *json_str = cJSON_PrintUnformatted(obj);
@@ -60,6 +61,9 @@ static void output_json_object(OutputConfig *config, cJSON *obj)
 
 void output_json_start_frame(OutputConfig *config, IntervalOutput *interval) 
 {
+    if (!config || !interval)
+        return;
+    
     if (json_root) 
     {
         cJSON_Delete(json_root);
@@ -107,11 +111,14 @@ void output_json_profile_entry(OutputConfig *config, ProfileOutput *entry)
 
 void output_json_exception_entry(OutputConfig *config, ExceptionOutput *exception) 
 {
+    if (!config || !exception)
+        return;
+    
     if (config->mode == OUTPUT_JSON_UDP) 
     {
         cJSON *item = cJSON_CreateObject();
         if (!item) 
-        return;
+            return;
         
         cJSON_AddNumberToObject(item, "ex", 1);
         cJSON_AddNumberToObject(item, "num", exception->exception_num);
@@ -132,7 +139,7 @@ void output_json_exception_entry(OutputConfig *config, ExceptionOutput *exceptio
     {
         cJSON *item = cJSON_CreateObject();
         if (!item) 
-        return;
+            return;
         
         cJSON_AddNumberToObject(item, "num", exception->exception_num);
         cJSON_AddStringToObject(item, "name", exception->exception_name ? exception->exception_name : "");
@@ -221,7 +228,7 @@ void output_json_rtos_threads(OutputConfig *config, struct rtosState *rtos, uint
         }
         
         char tcb_str[20];
-        snprintf(tcb_str, sizeof(tcb_str), "0x%08X", thread->tcb_addr);
+        snprintf(tcb_str, sizeof(tcb_str), "0x%08" PRIXPTR, (uintptr_t)thread->tcb_addr);
         cJSON_AddStringToObject(thread_obj, "tcb", tcb_str);
         cJSON_AddStringToObject(thread_obj, "name", thread->name);
         cJSON_AddStringToObject(thread_obj, "func", thread->entry_func_name ? thread->entry_func_name : "unknown");
@@ -320,7 +327,7 @@ void output_json_rtos_info(OutputConfig *config, void *rtos_data)
 
 void output_json_end_frame(OutputConfig *config) 
 {
-    if (!json_root) 
+    if (!config || !json_root) 
         return;
     
     if (config->mode == OUTPUT_JSON_FILE) 

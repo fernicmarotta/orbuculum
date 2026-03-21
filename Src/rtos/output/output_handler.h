@@ -18,6 +18,7 @@ typedef struct {
     FILE *file;
     int udp_socket;
     struct sockaddr_in *udp_dest;
+    const char *udp_host;
     bool mono;
     uint32_t cutscreen;
 } OutputConfig;

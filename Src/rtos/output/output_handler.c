@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netdb.h>
 
 typedef void (*start_frame_fn)(OutputConfig*, IntervalOutput*);
 typedef void (*profile_entry_fn)(OutputConfig*, ProfileOutput*);
@@ -74,16 +75,32 @@ static const thread_switch_fn thread_switch_handlers[] = {
     [OUTPUT_DISABLED] = NULL
 };
 
-void output_init(OutputConfig *config) 
+void output_init(OutputConfig *config)
 {
-    if (!config) 
+    if (!config)
         return;
-    
-    if (config->mode == OUTPUT_JSON_UDP && config->udp_socket < 0) {
+
+    if (config->mode == OUTPUT_JSON_UDP && config->udp_socket < 0 && config->udp_dest) {
         config->udp_socket = socket(AF_INET, SOCK_DGRAM, 0);
-        if (config->udp_socket >= 0 && config->udp_dest) {
+        if (config->udp_socket >= 0) {
             config->udp_dest->sin_family = AF_INET;
-            config->udp_dest->sin_addr.s_addr = inet_addr("127.0.0.1");
+            const char *host = config->udp_host ? config->udp_host : "127.0.0.1";
+
+            struct addrinfo hints = {0}, *result = NULL;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_DGRAM;
+
+            if (getaddrinfo(host, NULL, &hints, &result) == 0 && result)
+            {
+                struct sockaddr_in *addr_in = (struct sockaddr_in *)result->ai_addr;
+                config->udp_dest->sin_addr = addr_in->sin_addr;
+                freeaddrinfo(result);
+            }
+            else
+            {
+                /* Fallback to inet_addr for direct IP addresses */
+                config->udp_dest->sin_addr.s_addr = inet_addr(host);
+            }
         }
     }
 }

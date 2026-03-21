@@ -12,5 +12,6 @@ void output_ftrace_stats(OutputConfig *config, StatsOutput *stats);
 void output_ftrace_rtos_info(OutputConfig *config, void *rtos_data);
 void output_ftrace_end_frame(OutputConfig *config);
 void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us);
+void output_ftrace_reset(void);
 
 #endif

@@ -12,6 +12,9 @@ static uint32_t printed_lines = 0;
 
 void output_console_clear_screen(OutputConfig *config) 
 {
+    if (!config)
+        return;
+    
     if (!config->mono)
     {
         genericsFPrintf(stdout, CLEAR_SCREEN);
@@ -26,8 +29,9 @@ void output_console_start_frame(OutputConfig *config, IntervalOutput *interval)
 
 void output_console_profile_entry(OutputConfig *config, ProfileOutput *entry) 
 {
-    if (!entry) return;
+    if (!config || !entry) return;
     
+    const char *func = entry->function ? entry->function : "unknown";
     uint32_t percentage_int = (uint32_t)(entry->percentage * 100);
     
     if (!config->mono) 
@@ -43,9 +47,9 @@ void output_console_profile_entry(OutputConfig *config, ProfileOutput *entry)
         if (entry->line > 0) 
         {
             fprintf(stdout, C_SUPPORT2 "%s" C_RESET "::" C_CONTEXT "%d\n",
-                    entry->function, entry->line);
+                    func, entry->line);
         } else {
-            fprintf(stdout, C_SUPPORT2 "%s" C_RESET "\n", entry->function);
+            fprintf(stdout, C_SUPPORT2 "%s" C_RESET "\n", func);
         }
     } else {
         fprintf(stdout, "%3d.%02d%%  %7" PRIu64 " ",
@@ -58,9 +62,9 @@ void output_console_profile_entry(OutputConfig *config, ProfileOutput *entry)
         
         if (entry->line > 0) 
         {
-            fprintf(stdout, "%s::%d\n", entry->function, entry->line);
+            fprintf(stdout, "%s::%d\n", func, entry->line);
         } else {
-            fprintf(stdout, "%s\n", entry->function);
+            fprintf(stdout, "%s\n", func);
         }
     }
     
@@ -76,6 +80,11 @@ void output_console_exception_header(OutputConfig *config)
 
 void output_console_exception_entry(OutputConfig *config, ExceptionOutput *exception) 
 {
+    if (!config || !exception)
+        return;
+    
+    const char *name = exception->exception_name ? exception->exception_name : "unknown";
+    
     if (!config->mono) 
     {
         genericsFPrintf(stdout, "| " C_DATA "%-17s" C_RESET " | " C_DATA "%8" PRIu64 C_RESET 
@@ -83,16 +92,14 @@ void output_console_exception_entry(OutputConfig *config, ExceptionOutput *excep
                 " | " C_DATA "%5.1f" C_RESET " | " C_DATA "%10" PRId64 C_RESET 
                 " | " C_DATA "%10" PRId64 C_RESET " | " C_DATA "%10" PRId64 C_RESET 
                 " | " C_DATA "%10" PRId64 C_RESET " |\n",
-                exception->exception_name,
-                exception->visits, exception->max_depth, exception->total_time,
+                name, exception->visits, exception->max_depth, exception->total_time,
                 exception->util_percent, exception->ave_time,
                 exception->min_time, exception->max_time, exception->max_wall_time);
     } else {
         genericsFPrintf(stdout, "| %-17s | %8" PRIu64 " | %5" PRIu32 
                 " | %11" PRId64 " | %5.1f | %10" PRId64 " | %10" PRId64 
                 " | %10" PRId64 " | %10" PRId64 " |\n",
-                exception->exception_name,
-                exception->visits, exception->max_depth, exception->total_time,
+                name, exception->visits, exception->max_depth, exception->total_time,
                 exception->util_percent, exception->ave_time,
                 exception->min_time, exception->max_time, exception->max_wall_time);
     }
@@ -100,6 +107,9 @@ void output_console_exception_entry(OutputConfig *config, ExceptionOutput *excep
 
 void output_console_stats(OutputConfig *config, StatsOutput *stats) 
 {
+    if (!config || !stats)
+        return;
+    
     static uint32_t last_overflow = 0;
     static uint32_t last_sync = 0;
     static uint32_t last_errors = 0;
@@ -128,6 +138,9 @@ void output_console_rtos_info(OutputConfig *config, void *rtos_data)
 
 void output_console_end_frame(OutputConfig *config) 
 {
+    if (!config)
+        return;
+    
     if (!config->mono) 
     {
         fprintf(stdout, "\n" C_RESET);
