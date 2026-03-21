@@ -5,7 +5,7 @@
 `orbtop-rtos` can track FreeRTOS kernel object blocking events (mutex,
 semaphore, queue) on ARM Cortex-M targets. When a task blocks on a
 queue-based object, the event is captured via a DWT watchpoint and displayed
-in ftrace/Perfetto output with `prev_state=D` and a named counter track.
+in ftrace output with `prev_state=D` (`sched_switch`) and a named counter track (`tracing_mark_write`).
 
 ## Architecture
 
@@ -141,7 +141,7 @@ proc rtos_dwt2_config {addr} {
 }
 ```
 
-### 5. Ejecutar orbtop-rtos
+### 5. Run orbtop-rtos
 
 ```bash
 ./build/orbtop-rtos \
@@ -155,20 +155,20 @@ proc rtos_dwt2_config {addr} {
     -K trace.ftrace
 ```
 
-| Opción | Descripción |
-|--------|-------------|
-| `-e`   | ELF del firmware (para DWARF + símbolos) |
-| `-T`   | Tipo de RTOS (`freertos`, `rtx5`, `zephyr`) |
-| `-w`   | Variable watchpoint para object tracking (DWT comp2) |
-| `-s`   | Servidor orbuculum (host:puerto) |
-| `-W`   | Puerto telnet de OpenOCD |
-| `-F`   | Frecuencia del CPU en Hz |
-| `-p`   | Protocolo de trace (`ITM` o `ETM`) |
-| `-K`   | Fichero de salida ftrace |
+| Option | Description                                     |
+|--------|-------------------------------------------------|
+| `-e`   | Firmware ELF file (for DWARF + symbols)         |
+| `-T`   | RTOS type (`freertos`, `rtx5`, `zephyr`)        |
+| `-w`   | Watchpoint variable for object tracking (comp2) |
+| `-s`   | orbuculum server (host:port)                    |
+| `-W`   | OpenOCD telnet port                             |
+| `-F`   | CPU frequency in Hz                             |
+| `-p`   | Trace protocol (`ITM` or `ETM`)                 |
+| `-K`   | ftrace output file                              |
 
 ## How It Works Internally
 
-### Type detection (DWARF-based, no hardcoded offsets)
+### Type detection (DWARF-based)
 
 At startup, `orbtop-rtos` resolves from the ELF:
 
@@ -214,6 +214,12 @@ not as a dedicated `mpool:` event.
 
 Objects not registered with `vQueueAddToRegistry()` appear with their hex
 address instead of a name: `sem:0x24006958`.
+
+### Single CPU only
+
+The current implementation only supports single-core FreeRTOS targets.
+FreeRTOS v11+ SMP renames `pxCurrentTCB` to `pxCurrentTCBs` (array per
+core), which is not yet supported.
 
 ## Ftrace Output
 

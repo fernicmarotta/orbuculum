@@ -5,7 +5,7 @@
 `orbtop-rtos` can track Zephyr kernel object blocking events (mutex,
 semaphore, message queue, event) on ARM Cortex-M targets. When a thread
 blocks on a kernel object, the event is captured via a DWT watchpoint and
-displayed in ftrace/Perfetto output with `prev_state=D` and a named
+displayed in ftrace output with `prev_state=D` (`sched_switch`) and a named
 counter track.
 
 ## Architecture
@@ -37,8 +37,7 @@ counter track.
 
 ## Type Encoding
 
-Unlike FreeRTOS (where all objects share the `Queue_t` structure and have
-a `ucQueueType` field), Zephyr kernel objects (`k_mutex`, `k_sem`, `k_msgq`,
+Zephyr kernel objects (`k_mutex`, `k_sem`, `k_msgq`,
 `k_event`) have no common type identifier.  The firmware encodes the object
 type in bits [1:0] of the address written to `rtos_obj_trace`:
 
@@ -85,6 +84,7 @@ Since all Cortex-M heap/BSS addresses are word-aligned, bits [1:0] are always
 ### 1. Kconfig (`prj.conf`)
 
 ```
+CONFIG_TRACING=y
 CONFIG_THREAD_NAME=y
 CONFIG_DEBUG_THREAD_INFO=y
 CONFIG_THREAD_MONITOR=y
@@ -93,8 +93,9 @@ CONFIG_DEBUG_OPTIMIZATIONS=y
 CONFIG_STM32_ENABLE_DEBUG_SLEEP_STOP=y
 ```
 
-No `CONFIG_TRACING` is needed.  The trace hooks are overridden at the
-preprocessor level using a `tracing.h` wrapper (see below).
+`CONFIG_TRACING=y` is required so that the `SYS_PORT_TRACING_OBJ_FUNC_BLOCKING`
+macros in the kernel expand to `sys_port_trace_*_blocking` calls.  Without it
+these macros are compiled out entirely and our overrides have no effect.
 
 ### 2. Trace hook override via `#include_next` wrapper
 
@@ -118,21 +119,33 @@ samples/obj_tracking/
         └── tracing.h                  ← wrapper (shadows Zephyr's)
 ```
 
-**`CMakeLists.txt`** — place `src/` BEFORE Zephyr's include paths:
+**`CMakeLists.txt`** — place `src/` BEFORE Zephyr's include paths.
+`zephyr_include_directories()` does not support the `BEFORE` keyword (it
+treats it as a directory name).  Use CMake native
+`target_include_directories()` on the `kernel` target instead:
 
 ```cmake
-zephyr_include_directories(BEFORE src)
+target_include_directories(kernel BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(zephyr BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 ```
 
 **`src/zephyr/tracing/tracing.h`** — wrapper that includes the real
-header first, then applies overrides:
+header first, then applies overrides.  The header guard is critical:
+Zephyr's own `tracing.h` may re-include `<zephyr/tracing/tracing.h>`
+internally during its processing, and without the guard our overrides
+would run before the real header finishes, letting Zephyr overwrite them.
 
 ```c
-/* Include the real Zephyr tracing.h first */
+#ifndef ORBUCULUM_TRACING_WRAPPER_H
+#define ORBUCULUM_TRACING_WRAPPER_H
+
+/* Include the real Zephyr tracing.h first (fully) */
 #include_next <zephyr/tracing/tracing.h>
 
-/* Override the blocking hooks with our DWT comp2 writes */
+/* Now override the blocking hooks with our DWT comp2 writes */
 #include "orbuculum_obj_trace.h"
+
+#endif /* ORBUCULUM_TRACING_WRAPPER_H */
 ```
 
 **`src/orbuculum_obj_trace.h`** — the actual hook overrides:
@@ -182,11 +195,16 @@ the same pattern with the appropriate type tag.
 
 **How it works:** when Zephyr's kernel compiles `mutex.c` and does
 `#include <zephyr/tracing/tracing.h>`, it finds our wrapper first
-(thanks to `BEFORE`).  The wrapper uses `#include_next` to pull in the
-real Zephyr header (which defines empty macros), then includes
-`orbuculum_obj_trace.h` which `#undef`s and redefines the blocking
-hooks with our DWT comp2 writes.  This works on all Zephyr versions
-(3.x and 4.x).
+(thanks to `BEFORE` on the `kernel` target).  The header guard prevents
+recursive entry.  `#include_next` pulls in the real Zephyr header, which
+with `CONFIG_TRACING=y` defines the `sys_port_trace_*_blocking` macros
+as no-ops.  Then `orbuculum_obj_trace.h` `#undef`s and redefines them
+with our DWT comp2 writes.  This works on all Zephyr versions (3.x and
+4.x) without requiring
+[`CONFIG_TRACING_CUSTOM`](https://github.com/zephyrproject-rtos/zephyr/blob/main/subsys/tracing/Kconfig),
+which was added to `main` in
+[PR #102290](https://github.com/zephyrproject-rtos/zephyr/pull/102290)
+(not yet in any release as of v4.3.0) and is marked as `[EXPERIMENTAL]`.
 
 ### 3. Define the trace variable
 
@@ -198,8 +216,7 @@ volatile uint32_t rtos_obj_trace __attribute__((used));
 
 ### 4. OpenOCD configuration
 
-Same as FreeRTOS — configure DWT comparator 2 on the `rtos_obj_trace`
-address:
+Configure DWT comparator 2 on the `rtos_obj_trace` address:
 
 ```tcl
 set DWT_COMP2 0xE0001040
@@ -244,8 +261,7 @@ proc rtos_dwt2_config {addr} {
 
 ### Type detection (firmware-side, via type tag)
 
-Unlike FreeRTOS where the host reads `ucQueueType` from the target, in
-Zephyr the type is encoded by the firmware in bits [1:0] of the value
+The object type is encoded by the firmware in bits [1:0] of the value
 written to `rtos_obj_trace`.
 
 When `rtosHandleObjectEvent()` receives a DWT comp2 value:
@@ -260,8 +276,8 @@ already encoded the type.
 
 ### Name resolution
 
-Zephyr kernel objects do not have name registries (unlike FreeRTOS
-`xQueueRegistry`).  Object names are always the hex address:
+Zephyr kernel objects do not have name registries.  Object names are
+always the hex address:
 `mutex:0x20001234`, `sem:0x20005678`.
 
 ## Ftrace Output
@@ -284,9 +300,9 @@ rtos_obj-1 [000] .... 12.345: tracing_mark_write: C|1|mutex:0x20001234|0
 Zephyr kernel objects do not have name fields or registries.  Objects
 always appear with their hex address: `mutex:0x20001234`.
 
-### Event Groups have no names
+### Event objects have no names
 
-Same as FreeRTOS — `k_event` objects show as `evtflags:0x20001234`.
+`k_event` objects show as `evtflags:0x20001234`.
 
 ### Trace hook stability
 
@@ -301,12 +317,3 @@ value.
 The current implementation only supports single-CPU Zephyr targets
 (Cortex-M).  SMP configurations are not supported.
 
-## Backward Compatibility
-
-The extension from 1-bit (FreeRTOS) to 2-bit (Zephyr) type encoding is
-backward compatible:
-
-- **FreeRTOS**: Queue_t addresses use tag 00, EventGroup_t uses tag 01.
-  Bit 1 is always 0, so the old `& ~1u` behavior is preserved by `& ~3u`.
-- **RTX5**: Same as FreeRTOS (bit 1 always 0).
-- **Zephyr**: Uses all four tag values (00–11).

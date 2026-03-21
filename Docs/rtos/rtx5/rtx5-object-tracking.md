@@ -5,7 +5,7 @@
 `orbtop-rtos` can track RTOS kernel object blocking events (mutex, semaphore,
 event flags, message queue, memory pool) on ARM RTX5 targets. When a thread
 blocks on an object, the event is captured via a DWT watchpoint and displayed
-in ftrace/Perfetto output with `prev_state=D` and a named counter track.
+in ftrace output with `prev_state=D` (`sched_switch`) and a named counter track (`tracing_mark_write`).
 
 ## Architecture
 
@@ -50,6 +50,29 @@ RTX5 uses a common control block header with an ID byte at offset 0:
 Object names are read from the RTX5 control block name pointer (offset 4).
 
 ## Firmware Setup
+
+### Prerequisites: RTX5 Event Recorder macros
+
+The `EvrRtx*Pending` functions are defined as `__WEAK` in `rtx_evr.c` (part of
+the RTX5 kernel source). They are compiled **only** when the corresponding
+`OS_EVR_*` macros are enabled in `RTX_Config.h`. The following must be set:
+
+| Macro in `RTX_Config.h` | Enables callbacks for |
+|---|---|
+| `OS_EVR_MUTEX = 1` | `EvrRtxMutexAcquirePending` |
+| `OS_EVR_SEMAPHORE = 1` | `EvrRtxSemaphoreAcquirePending` |
+| `OS_EVR_EVFLAGS = 1` | `EvrRtxEventFlagsWaitPending` |
+| `OS_EVR_MSGQUEUE = 1` | `EvrRtxMessageQueueGetPending`, `*PutPending`, `*InsertPending` |
+| `OS_EVR_MEMPOOL = 1` | `EvrRtxMemoryPoolAllocPending` |
+| `OS_EVR_WAIT = 1` | `EvrRtxDelay`, `EvrRtxDelayUntil` |
+
+Additionally, `EVR_RTX_DISABLE` must **not** be defined (it disables all
+event callbacks globally).
+
+These macros are typically enabled by default in `RTX_Config.h`. The actual
+`RTE_Compiler_EventRecorder` component is **not** required — the weak
+functions exist regardless, they just become empty stubs without it. Our
+override replaces them with a single write to `rtos_obj_trace`.
 
 ### 1. Create the trace variable
 
@@ -119,12 +142,14 @@ void EvrRtxDelayUntil(uint32_t ticks)
 }
 ```
 
-These functions are weak-linked RTX5 event recorder callbacks. The RTX kernel
-calls them automatically when a thread is about to block. Writing the control
-block address to `rtos_obj_trace` triggers DWT comparator 2.
+These functions are `__WEAK`-linked RTX5 event recorder callbacks defined in
+`rtx_evr.c`. The RTX kernel calls them automatically when a thread is about
+to block. Our implementations override the weak stubs with a single write
+to `rtos_obj_trace`, which triggers DWT comparator 2.
 
 Writing `0` (in `EvrRtxDelay`/`EvrRtxDelayUntil`) signals a voluntary delay,
 which produces `prev_state=S` in ftrace output.
+
 
 ### 2. OpenOCD configuration
 
@@ -147,7 +172,15 @@ proc rtos_dwt2_config {addr} {
 ### 3. Run orbtop-rtos
 
 ```bash
-orbtop-rtos -e firmware.elf -T <telnet_port> -w rtos_obj_trace -f trace.ftrace
+orbtop-rtos \
+    -e firmware.elf \
+    -F 480000000 \
+    -T rtx5 \
+    -s localhost:46000 \
+    -p ITM \
+    -W 4444 \
+    -w rtos_obj_trace \
+    -K trace.ftrace
 ```
 
 The `-w rtos_obj_trace` option tells orbtop-rtos to look up the symbol address

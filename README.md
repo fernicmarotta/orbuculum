@@ -54,9 +54,9 @@ data from the target and make it available to clients whenever it can.
 * orbtop: A top utility to see what's actually going on with your target. It can also
 generate input files for dot and gnuplot for perty graphics.
 
-* orbtop-rtos: An enhanced version of orbtop with RTOS-aware thread profiling support. Currently
-supports  RTOS ( cmsis rtx, etc) and provides per-thread CPU usage statistics, thread state monitoring, and
-context switch analysis. Requires connection to OpenOCD for RTOS data extraction.
+* orbtop-rtos: RTOS-aware thread profiler with per-thread CPU usage, context switch analysis, and
+kernel object blocking detection. Supports RTX5, FreeRTOS, and Zephyr. Outputs to console, JSON
+(file/UDP), and ftrace (`sched_switch` + `tracing_mark_write`). Requires OpenOCD telnet for target memory reads.
 
 * orbstat: An analysis/statistics utility which can produce KCacheGrind input files.
 
@@ -1066,82 +1066,133 @@ is pumping out clean SWO data. This information is just left here to show the fl
 orbtop-rtos: RTOS-aware Performance Profiling
 ==============================================
 
-`orbtop-rtos` extends the functionality of `orbtop` by adding RTOS-aware thread profiling capabilities. 
-It provides detailed per-thread CPU usage statistics and context switch analysis for RTX5-based systems.
+`orbtop-rtos` extends the functionality of `orbtop` by adding RTOS-aware thread profiling capabilities.
+It provides detailed per-thread CPU usage statistics, context switch analysis, and kernel object
+blocking tracking for ARM Cortex-M targets.
+
+Supported RTOS:
+* **RTX5** (CMSIS-RTOS2): `-T rtx5`
+* **FreeRTOS**: `-T freertos`
+* **Zephyr**: `-T zephyr`
 
 Key features:
-* Real-time thread CPU usage monitoring with percentage utilization
-* Context switch counting and timing analysis  
+* Real-time per-thread CPU usage monitoring with percentage utilization
+* Context switch counting and timing analysis
+* Kernel object blocking detection (mutex, semaphore, queue, event) via DWT watchpoint
 * Exception/interrupt profiling with entry/exit tracking
-* Uses DWT exception trace for accurate interrupt timing
-* ITM timestamps for precise time measurements
-* Multiple output formats: console, JSON, and ftrace-compatible
+* ITM channel tagging for custom signal tracking
+* Multiple output formats: console, JSON (file or UDP), and ftrace (`sched_switch` + `tracing_mark_write`)
 
 Prerequisites:
-* Target must be running RTX5 RTOS
 * OpenOCD must be running with telnet enabled (default port 4444)
-* DWT exception trace and ITM timestamps must be enabled on target
+* ITM timestamps and DWT must be enabled on the target
+* See `Docs/rtos/` for RTOS-specific target configuration
 
 Typical usage:
 
-```
-# In another terminal, run orbtop-rtos with RTOS support
-> orbtop-rtos -s localhost:46000 -p ITM -e firmware.elf -T rtxv5 -W 4444 -F 480000000
+```bash
+# RTX5
+orbtop-rtos -s localhost:46000 -p ITM -e firmware.elf -T rtx5 -W 4444 -F 480000000
 
-```
+# FreeRTOS with object tracking and ITM channels
+orbtop-rtos -s localhost:46000 -p ITM -e firmware.elf -T freertos -W 4444 -F 480000000 \
+    -w rtos_obj_trace -c 1-31:signal_ -K trace.ftrace
 
-The `-T rtx5` option enables RTOS thread profiling, and `-E` includes exception/interrupt analysis.
-The tool will automatically connect to OpenOCD to extract RTOS thread information and combine it
-with the ITM trace data to provide a comprehensive view of system behavior.
+# Zephyr with object tracking
+orbtop-rtos -s localhost:46000 -p ITM -e firmware.elf -T zephyr -W 4444 -F 480000000 \
+    -w rtos_obj_trace -K trace.ftrace
+```
 
 Output formats:
 
 **JSON output** (`-j <file>` or `-j udp:<port>`):
 Generates structured JSON data with thread statistics, CPU usage, context switches, and timing information.
-Can output to a file or send via UDP for real-time monitoring. The JSON includes:
-* Per-thread CPU usage percentages and accumulated runtime
-* Context switch counts and timing
-* Exception/interrupt statistics
-* Function-level profiling data
-* Thread state and priority information
+Can output to a file or send via UDP for real-time monitoring.
 
 **Ftrace output** (`-K <file>`):
-Generates Linux ftrace-compatible output that can be analyzed with standard Linux tracing tools like
-`trace-cmd` or visualized with tools like Perfetto UI (ui.perfetto.dev). Use `-` for stdout or 
-`/tmp/trace.pipe` for live tracing. This format captures:
-* Thread context switches with precise timestamps
-* Function entry/exit events
-* CPU usage over time
-* Compatible with kernel tracing analysis workflows
+Generates ftrace text output using `sched_switch` events for thread context switches and
+`tracing_mark_write` for kernel object counter tracks. Can be visualized with Perfetto UI
+(ui.perfetto.dev) or Eclipse TraceCompass. Blocking states (`prev_state=D` for blocked,
+`prev_state=S` for sleeping) are captured.
 
 Example with multiple outputs:
-```
+```bash
 # Generate both JSON metrics and ftrace timeline
-> ./orbtop-rtos -e firmware.elf -T rtx5 -E -j metrics.json -K trace.ftrace
+orbtop-rtos -s localhost:46000 -p ITM -e firmware.elf -T freertos -W 4444 -F 480000000 \
+    -E -j metrics.json -K trace.ftrace
 
-# Stream JSON via UDP and ftrace to pipe for live analysis
-> ./orbtop-rtos -e firmware.elf -T rtx5 -j udp:5000 -K /tmp/trace.pipe
+# Stream JSON via UDP for live monitoring
+orbtop-rtos -s localhost:46000 -p ITM -e firmware.elf -T rtx5 -W 4444 -F 480000000 \
+    -j udp:5000 -K /tmp/trace.pipe
 ```
 
 Runtime interaction (RTOS mode):
 When running in console mode, you can use keyboard shortcuts to change the sort order:
 * `t`: Sort by TCB address
 * `c`: Sort by current CPU usage
-* `m`: Sort by maximum CPU usage  
+* `m`: Sort by maximum CPU usage
 * `n`: Sort by thread name
 * `f`: Sort by function name
 * `p`: Sort by priority
 * `s`: Sort by context switches
 * `r`: Reset maximum CPU values
 
-Command line options specific to orbtop-rtos:
-* `-T, --rtos <type>`: RTOS type for thread profiling (currently only 'rtx5' supported)
-* `-j, --json-output <file|udp:port>`: JSON output to file or UDP port (REQUIRED argument when specified)
-* `-K, --ftrace <file>`: Generate ftrace output (use `-` for stdout, `/tmp/trace.pipe` for live)
-* `-S, --rtos-sort <method>`: Initial sort method: cpu|maxcpu|tcb|name|func|priority|switches
-* `-F, --cpu-freq <Hz>`: CPU frequency for accurate time calculations
-* `-W, --telnet-port <port>`: OpenOCD telnet port (default 4444)
-* All standard orbtop options are also available
+Command line options:
+
+ `-c, --itm-channel <ch>:<tag>`: ITM channel tagging. Supports single channels (`-c 2:sensor`),
+     ranges (`-c 1-31:signal_`), or all (`-c all:ch`). Tagged channels appear as counter tracks
+     in ftrace output (`tracing_mark_write` counter tracks).
+
+ `-D, --no-demangle`: Switch off C++ symbol demangling.
+
+ `-e, --elf-file <file>`: ELF file for symbols (required).
+
+ `-E, --exceptions`: Include exception/interrupt statistics in output.
+
+ `-F, --cpu-freq <Hz>`: CPU frequency for accurate time calculations.
+
+ `-f, --input-file <file>`: Take input from file instead of network.
+
+ `-I, --interval <ms>`: Display update interval in milliseconds (default 1000).
+
+ `-j, --json-output <file|udp:port>`: JSON output to file or UDP port.
+
+ `-K, --ftrace <file>`: Ftrace output file. Use `-` for stdout.
+
+ `-M, --no-colour`: Suppress colour in console output.
+
+ `-n, --itm-sync`: Enforce ITM sync requirement.
+
+ `-O, --objdump-opts <opts>`: Options to pass directly to objdump.
+
+ `-p, --protocol <OFLOW|ITM>`: Protocol to communicate. Must be set explicitly if `-s` is set.
+
+ `-P, --pace <microseconds>`: Delay in data transmission (for file replay).
+
+ `-s, --server <host>:<port>`: Server to connect to (default localhost:3402).
+
+ `-S, --rtos-sort <method>`: Initial sort method: cpu|maxcpu|tcb|name|func|priority|switches.
+
+ `-T, --rtos <type>`: RTOS type: `rtx5`, `freertos`, or `zephyr`.
+
+ `-t, --tag <number>`: OFLOW tag to decode (default 1).
+
+ `-v, --verbose <level>`: Verbosity 0(errors)..3(debug).
+
+ `-V, --version`: Print version and exit.
+
+ `-w, --watch-object <symbol>`: Variable name for kernel object tracking via DWT comparator 2.
+     The firmware writes the object address to this variable when a thread blocks on a kernel
+     object. Requires RTOS-specific firmware hooks (see `Docs/rtos/`).
+
+ `-W, --telnet-port <port>`: OpenOCD telnet port (default 4444).
+
+Further documentation:
+
+- [orbtop-rtos.md](Docs/rtos/orbtop-rtos.md) — Architecture, data flow, and detailed usage
+  - [freertos-object-tracking.md](Docs/rtos/freertos/freertos-object-tracking.md) — Firmware hooks, `xQueueRegistry` name lookup, DWARF type detection
+  - [rtx5-object-tracking.md](Docs/rtos/rtx5/rtx5-object-tracking.md) — RTX5/CMSIS-RTOS2 object tracking setup
+  - [zephyr-object-tracking.md](Docs/rtos/zephyr/zephyr-object-tracking.md) — Type-hint encoding, `#include_next` wrapper, `CONFIG_TRACING` setup
 
 Windows: concurrent debug and Orbuculum usage with Orbtrace
 ===========================================================
