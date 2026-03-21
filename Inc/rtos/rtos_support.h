@@ -174,6 +174,14 @@ struct rtosState {
     void *output_config;     /* Output handler for thread switches (OutputConfig*) */
 };
 
+/* Convert raw ITM timestamp ticks to microseconds using CPU frequency */
+static inline uint64_t ticks_to_us(struct rtosState *rtos, uint64_t ticks)
+{
+    if (rtos->cpu_freq >= 1000000)
+        return ticks / (rtos->cpu_freq / 1000000);
+
+    return ticks;
+}
 
 /* RTOS detection result */
 struct rtosDetection {

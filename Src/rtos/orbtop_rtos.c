@@ -386,7 +386,7 @@ void _handleSW( struct swMsg *m, struct ITMDecoder *i )
         .len = m->len
     };
 
-    output_itm_event( (OutputConfig *)_r.rtos->output_config, &event, _r.timeStamp );
+    output_itm_event( (OutputConfig *)_r.rtos->output_config, &event, ticks_to_us( _r.rtos, _r.timeStamp ) );
 }
 // ====================================================================================================
 void _handleDataAccessWP( struct wptMsg *m, struct ITMDecoder *i )

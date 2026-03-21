@@ -483,7 +483,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
                 }
 
                 output_object_block((OutputConfig *)rtos->output_config,
-                                   (uint32_t)rtos->current_thread, curr_comm, tag, false, timestamp);
+                                   (uint32_t)rtos->current_thread, curr_comm, tag, false, ticks_to_us(rtos, timestamp));
             }
         }
 
@@ -566,7 +566,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
         }
 
         output_object_block((OutputConfig *)rtos->output_config,
-                           (uint32_t)rtos->current_thread, curr_comm, tag, true, timestamp);
+                           (uint32_t)rtos->current_thread, curr_comm, tag, true, ticks_to_us(rtos, timestamp));
     }
 }
 
@@ -617,14 +617,14 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
             }
 
             output_object_block((OutputConfig *)rtos->output_config,
-                               prev_pid, prev_comm, tag, false, timestamp);
+                               prev_pid, prev_comm, tag, false, ticks_to_us(rtos, timestamp));
             obj->blocking_active = false;
         }
         /* If has_release_hooks: counter stays high until release event */
     }
 
     if (rtos->output_config)
-        output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, timestamp, prev_state);
+        output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, ticks_to_us(rtos, timestamp), prev_state);
 
     rtos->pending_prev_state = 0;
     rtos->pending_object_addr = 0;
