@@ -282,23 +282,9 @@ to release).
 
 ## Ftrace Output
 
-Thread switches with blocking show `prev_state=D`:
-```
-threadA-12345 [000] .... 1.000: sched_switch: ... prev_state=D ==> next_comm=threadB ...
-```
-
-Object events appear as counter tracks:
-```
-rtos_obj-1 [000] .... 1.000: tracing_mark_write: C|1|mutex:MyMutex|1
-rtos_obj-1 [000] .... 1.050: tracing_mark_write: C|1|mutex:MyMutex|0
-```
-
-With release hooks enabled, the `C|0` appears at the actual release time
-(not at the context switch), showing precise contention duration:
-```
-rtos_obj-1 [000] .... 1.000: tracing_mark_write: C|1|mutex:MyMutex|1
-rtos_obj-1 [000] .... 1.080: tracing_mark_write: C|1|mutex:MyMutex|0
-```
-
-In Perfetto, these render as named counter tracks showing when each object
-causes blocking, correlated with the thread timeline.
+See [Ftrace Output Reference](../ftrace/ftrace-output.md) for the full format
+specification. RTX5 object tracking uses the same ftrace events as FreeRTOS
+and Zephyr (`sched_switch` with `prev_state=D` and `tracing_mark_write C|1|...`
+counter tracks). Object type prefixes are determined by the control block `id`
+byte read from target memory (see [Object Type Prefixes](#object-type-prefixes)
+above).

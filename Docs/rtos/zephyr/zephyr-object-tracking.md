@@ -392,15 +392,80 @@ always the hex address:
 
 ## Ftrace Output
 
-Thread switches with blocking show `prev_state=D`:
+All examples below are from a real Zephyr capture (`zephyr_example_trace.ftrace`,
+STM32H743, 480 MHz). Zephyr objects have no name registries — all objects show
+as hex addresses.
+
+### Context switches by state
+
+**Preempted (R)** — thread still runnable, yielded to equal/higher priority:
 ```
-mutex_a|task_mutex_a-603979776 [000] .... 12.345: sched_switch: ... prev_state=D ==> next_comm=mutex_b ...
+mutex_a_tid|task_mutex_a-603981200 [000] ....     0.116787: sched_switch: prev_comm=mutex_a_tid|task_mutex_a prev_pid=603981200 prev_prio=5 prev_state=R ==> next_comm=producer_tid|task_producer next_pid=603980048 next_prio=5
 ```
 
-Object events appear as counter tracks:
+**Sleeping (S)** — thread called `k_sleep` / `k_msleep`:
 ```
-rtos_obj-1 [000] .... 12.340: tracing_mark_write: C|1|mutex:0x20001234|1
-rtos_obj-1 [000] .... 12.345: tracing_mark_write: C|1|mutex:0x20001234|0
+producer_tid|task_producer-603980048 [000] ....     2.366437: sched_switch: prev_comm=producer_tid|task_producer prev_pid=603980048 prev_prio=5 prev_state=S ==> next_comm=mutex_b_tid|task_mutex_b next_pid=603981008 next_prio=5
+```
+
+**Blocked on object (D)** — thread waiting on mutex/sem/msgq/event:
+```
+mutex_b_tid|task_mutex_b-603981008 [000] ....     2.235023: sched_switch: prev_comm=mutex_b_tid|task_mutex_b prev_pid=603981008 prev_prio=5 prev_state=D ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
+```
+
+### Object tracking — acquire/release pairs
+
+Each pair shows `C|1` (acquire = thread blocks) and `C|0` (release = object freed).
+
+**mutex** (k_mutex):
+```
+        rtos_obj-1 [000] ....     2.235014: tracing_mark_write: C|1|mutex:0x24000090|1
+        rtos_obj-1 [000] ....     2.235023: tracing_mark_write: C|1|mutex:0x24000090|0
+```
+
+**sem** (k_sem):
+```
+        rtos_obj-1 [000] ....     2.600209: tracing_mark_write: C|1|sem:0x240000E8|1
+        rtos_obj-1 [000] ....     2.775444: tracing_mark_write: C|1|sem:0x240000E8|0
+```
+
+**evtflags** (k_event):
+```
+        rtos_obj-1 [000] ....     2.395712: tracing_mark_write: C|1|evtflags:0x24000DC8|1
+        rtos_obj-1 [000] ....     2.395721: tracing_mark_write: C|1|evtflags:0x24000DC8|0
+```
+
+**msgqueue** (k_msgq):
+```
+        rtos_obj-1 [000] ....     2.600233: tracing_mark_write: C|1|msgqueue:0x240000A8|1
+        rtos_obj-1 [000] ....     2.775439: tracing_mark_write: C|1|msgqueue:0x240000A8|0
+```
+
+### Delay events
+
+When `rtos_obj_trace = 0` (k_sleep), the context switch shows `prev_state=S`
+with no object counter event:
+```
+event_tid|task_event_consumer-603980240 [000] ....     2.381083: sched_switch: prev_comm=event_tid|task_event_consumer prev_pid=603980240 prev_prio=5 prev_state=S ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
+```
+
+### Batch release pattern
+
+When a producer signals multiple consumers, multiple `C|0` events appear at
+nearly the same timestamp:
+```
+        rtos_obj-1 [000] ....     2.775439: tracing_mark_write: C|1|msgqueue:0x240000A8|0
+        rtos_obj-1 [000] ....     2.775444: tracing_mark_write: C|1|sem:0x240000E8|0
+        rtos_obj-1 [000] ....     2.775454: tracing_mark_write: C|1|evtflags:0x24000DC8|0
+```
+
+### Complete sequence — mutex contention
+
+A full blocking cycle: thread blocks, context switch, release, resume:
+```
+        rtos_obj-1 [000] ....     2.235014: tracing_mark_write: C|1|mutex:0x24000090|1
+mutex_b_tid|task_mutex_b-603981008 [000] ....     2.235023: sched_switch: prev_comm=mutex_b_tid|task_mutex_b prev_pid=603981008 prev_prio=5 prev_state=D ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
+        rtos_obj-1 [000] ....     2.264211: tracing_mark_write: C|1|mutex:0x24000090|0
 ```
 
 ## Limitations

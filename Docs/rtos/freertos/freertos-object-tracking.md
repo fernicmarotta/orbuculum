@@ -332,23 +332,88 @@ core), which is not yet supported.
 
 ## Ftrace Output
 
-Thread switches with blocking show `prev_state=D`:
+All examples below are from a real FreeRTOS capture (`freertos_pcs_260_autotest_trace.ftrace`,
+STM32H7, 480 MHz).
+
+### Context switches by state
+
+**Preempted (R)** — thread still runnable, higher-priority thread took CPU:
 ```
-semWait|task_sem_wait-604022432 [000] .... 614.394: sched_switch: ... prev_state=D ==> next_comm=producer ...
+mutexA|task_mutex_a-604019640 [000] ....  1668.583580: sched_switch: prev_comm=mutexA|task_mutex_a prev_pid=604019640 prev_prio=24 prev_state=R ==> next_comm=autotestTask|autotest_task next_pid=604032448 next_prio=25
 ```
 
-Object events appear as counter tracks:
+**Sleeping (S)** — thread called `vTaskDelay` / `osDelay`:
 ```
-rtos_obj-1 [000] .... 614.391: tracing_mark_write: C|1|sem:TestSem|1
-rtos_obj-1 [000] .... 614.394: tracing_mark_write: C|1|sem:TestSem|0
-```
-
-With release hooks enabled, the `C|0` appears at the actual release time
-(not at the context switch), showing precise contention duration:
-```
-rtos_obj-1 [000] .... 614.391: tracing_mark_write: C|1|mutex:TestMutex|1
-rtos_obj-1 [000] .... 614.450: tracing_mark_write: C|1|mutex:TestMutex|0
+blinkTask|blink_task-604027912 [000] ....   614.533882: sched_switch: prev_comm=blinkTask|blink_task prev_pid=604027912 prev_prio=24 prev_state=S ==> next_comm=mutexA|task_mutex_a next_pid=604019640 next_prio=24
 ```
 
-In Perfetto, these render as named counter tracks showing when each object
-causes blocking, correlated with the thread timeline.
+**Blocked on object (D)** — thread waiting on mutex/sem/queue:
+```
+mutexB|task_mutex_b-604021104 [000] ....   614.510154: sched_switch: prev_comm=mutexB|task_mutex_b prev_pid=604021104 prev_prio=24 prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
+```
+
+### Object tracking — acquire/release pairs
+
+Each pair shows `C|1` (acquire = thread blocks) and `C|0` (release = object freed).
+
+**mutex** (named via `vQueueAddToRegistry`):
+```
+        rtos_obj-1 [000] ....   621.705868: tracing_mark_write: C|1|mutex:TestMutex|1
+        rtos_obj-1 [000] ....   628.464283: tracing_mark_write: C|1|mutex:TestMutex|0
+```
+
+**sem** (named counting semaphore):
+```
+        rtos_obj-1 [000] ....   614.512741: tracing_mark_write: C|1|sem:TestSem|1
+        rtos_obj-1 [000] ....   614.516284: tracing_mark_write: C|1|sem:TestSem|0
+```
+
+**sem** (named binary semaphore):
+```
+        rtos_obj-1 [000] ....   614.518883: tracing_mark_write: C|1|sem:TestBSem|1
+        rtos_obj-1 [000] ....   614.522390: tracing_mark_write: C|1|sem:TestBSem|0
+```
+
+**sem** (unnamed — no `vQueueAddToRegistry`, shows hex):
+```
+        rtos_obj-1 [000] ....  1682.033379: tracing_mark_write: C|1|sem:0x24006960|1
+        rtos_obj-1 [000] ....  1682.037092: tracing_mark_write: C|1|sem:0x24006960|0
+```
+
+**queue** (unnamed):
+```
+        rtos_obj-1 [000] ....  1677.526053: tracing_mark_write: C|1|queue:0x2400DF08|1
+        rtos_obj-1 [000] ....  1677.527760: tracing_mark_write: C|1|queue:0x2400DF08|0
+```
+
+**rmutex** (recursive mutex, unnamed):
+```
+        rtos_obj-1 [000] ....  2177.550138: tracing_mark_write: C|1|rmutex:0x2400CFE8|1
+        rtos_obj-1 [000] ....  2177.550138: tracing_mark_write: C|1|rmutex:0x2400CFE8|0
+```
+
+### Delay events
+
+When `rtos_obj_trace = 0` (delay), the context switch shows `prev_state=S`
+with no object counter event:
+```
+producer|task_producer-604026960 [000] ....   614.528683: sched_switch: prev_comm=producer|task_producer prev_pid=604026960 prev_prio=24 prev_state=S ==> next_comm=blinkTask|blink_task next_pid=604027912 next_prio=24
+```
+
+### ITM stimulus channels
+
+Firmware writes to ITM stimulus ports appear as `C|0|tag|value` counters:
+```
+           <...>-0 [000] ....  1094.505372: tracing_mark_write: C|0|signal_1|45
+           <...>-0 [000] ....  1094.505667: tracing_mark_write: C|0|signal_2|207
+           <...>-0 [000] ....  1094.505954: tracing_mark_write: C|0|signal_3|70
+```
+
+### Complete sequence — mutex contention
+
+A full blocking cycle: thread blocks, context switch, release, resume:
+```
+        rtos_obj-1 [000] ....   614.506031: tracing_mark_write: C|1|mutex:TestMutex|1
+mutexB|task_mutex_b-604021104 [000] ....   614.510154: sched_switch: prev_comm=mutexB|task_mutex_b prev_pid=604021104 prev_prio=24 prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
+        rtos_obj-1 [000] ....   614.510154: tracing_mark_write: C|1|mutex:TestMutex|0
+```

@@ -510,7 +510,7 @@ Written once on the first context switch:
 Every context switch generates a `sched_switch` event:
 
 ```
-mutexA|task_mutex_a-603979776 [000] ....     0.024078: sched_switch: prev_comm=mutexA|task_mutex_a prev_pid=603979776 prev_prio=24 prev_state=R ==> next_comm=mutexB|task_mutex_b next_pid=604021104 next_prio=24
+mutexA|task_mutex_a-604019640 [000] ....  1668.583580: sched_switch: prev_comm=mutexA|task_mutex_a prev_pid=604019640 prev_prio=24 prev_state=R ==> next_comm=autotestTask|autotest_task next_pid=604032448 next_prio=25
 ```
 
 Format: `name|entry_func-PID [CPU] .... TIMESTAMP: sched_switch: prev_comm=... prev_pid=PID prev_prio=PRIO prev_state=STATE ==> next_comm=... next_pid=PID next_prio=PRIO`
@@ -525,12 +525,12 @@ Format: `name|entry_func-PID [CPU] .... TIMESTAMP: sched_switch: prev_comm=... p
 
 Without object tracking (`-w`), you only see `prev_state=R` and `prev_state=S`.
 
-**Minimal example (thread switches only):**
+**Real examples (FreeRTOS, all three states):**
 
 ```
-           idle|os_idle-536871000 [000] ....     0.000000: sched_switch: ... prev_state=R ==> next_comm=main|main_thread next_pid=536871234 next_prio=24
-main|main_thread-536871234 [000] ....     0.001234: sched_switch: ... prev_state=S ==> next_comm=sensor|sensor_loop next_pid=536871456 next_prio=40
-sensor|sensor_loop-536871456 [000] ....     0.003456: sched_switch: ... prev_state=R ==> next_comm=idle|os_idle next_pid=536871000 next_prio=1
+mutexA|task_mutex_a-604019640 [000] ....     0.017183: sched_switch: ... prev_state=R ==> next_comm=mutexB|task_mutex_b next_pid=604021104 next_prio=24
+blinkTask|blink_task-604027912 [000] ....   614.533882: sched_switch: ... prev_state=S ==> next_comm=mutexA|task_mutex_a next_pid=604019640 next_prio=24
+mutexB|task_mutex_b-604021104 [000] ....   614.510154: sched_switch: ... prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
 ```
 
 ##### Object Tracking Events (`-w`)
@@ -541,9 +541,9 @@ When object tracking is enabled with `-w rtos_obj_trace`, two additional behavio
 2. **`tracing_mark_write`** counter events — mark when a thread starts and stops blocking on a specific object
 
 ```
-  semWait|task_sem_wait-604022568 [000] ....   614.391234: sched_switch: prev_comm=semWait|task_sem_wait prev_pid=604022568 prev_prio=24 prev_state=D ==> next_comm=producer|task_producer next_pid=604023456 next_prio=24
-         rtos_obj-1 [000] ....   614.391234: tracing_mark_write: C|1|sem:TestSem|1
-         rtos_obj-1 [000] ....   614.394567: tracing_mark_write: C|1|sem:TestSem|0
+        rtos_obj-1 [000] ....   614.512741: tracing_mark_write: C|1|sem:TestSem|1
+semWait|task_sem_wait-604022568 [000] ....   614.516284: sched_switch: prev_comm=semWait|task_sem_wait prev_pid=604022568 prev_prio=24 prev_state=D ==> next_comm=bsemWait|task_bsem_wait next_pid=604024032 next_prio=24
+        rtos_obj-1 [000] ....   614.516284: tracing_mark_write: C|1|sem:TestSem|0
 ```
 
 The counter track format is `C|1|type_prefix:object_name|flag`:
@@ -565,8 +565,9 @@ See per-RTOS details: [FreeRTOS](freertos/freertos-object-tracking.md) | [RTX5](
 When ITM channel logging is enabled with `-c`, firmware writes to ITM stimulus ports appear as additional counter tracks:
 
 ```
-           <...>-0 [000] ....  1094.504029: tracing_mark_write: C|0|signal_1|45
-           <...>-0 [000] ....  1094.504324: tracing_mark_write: C|0|signal_2|207
+           <...>-0 [000] ....  1094.505372: tracing_mark_write: C|0|signal_1|45
+           <...>-0 [000] ....  1094.505667: tracing_mark_write: C|0|signal_2|207
+           <...>-0 [000] ....  1094.505954: tracing_mark_write: C|0|signal_3|70
 ```
 
 The format is `C|0|tag_name|value`:
@@ -582,7 +583,8 @@ In Perfetto, each tagged channel renders as a separate counter track.
 
 ##### Combined Example (threads + objects + ITM)
 
-A trace file with all three event types:
+A real FreeRTOS trace showing all three event types together. Sequence:
+mutex acquire, D-state context switch, semaphore acquire, release, ITM burst.
 
 ```
 # tracer: nop
@@ -596,13 +598,16 @@ A trace file with all three event types:
 #                              ||| /     delay
 #           TASK-PID     CPU#  ||||   TIMESTAMP  FUNCTION
 #              | |         |   ||||      |         |
-           idle|os_idle-536871000 [000] ....     0.000000: sched_switch: prev_comm=idle|os_idle prev_pid=536871000 prev_prio=1 prev_state=R ==> next_comm=main|main_thread next_pid=536871234 next_prio=24
-           <...>-0 [000] ....     0.000512: tracing_mark_write: C|0|signal_2|100
-main|main_thread-536871234 [000] ....     0.005234: sched_switch: prev_comm=main|main_thread prev_pid=536871234 prev_prio=24 prev_state=D ==> next_comm=sensor|sensor_loop next_pid=536871456 next_prio=40
-         rtos_obj-1 [000] ....     0.005234: tracing_mark_write: C|1|mutex:DataLock|1
-           <...>-0 [000] ....     0.006100: tracing_mark_write: C|0|signal_5|42
-         rtos_obj-1 [000] ....     0.008456: tracing_mark_write: C|1|mutex:DataLock|0
-sensor|sensor_loop-536871456 [000] ....     0.008456: sched_switch: prev_comm=sensor|sensor_loop prev_pid=536871456 prev_prio=40 prev_state=S ==> next_comm=main|main_thread next_pid=536871234 next_prio=24
+         unknown-0 [000] ....     0.000000: sched_switch: prev_comm=unknown prev_pid=0 prev_prio=0 prev_state=R ==> next_comm=mutexA|task_mutex_a next_pid=604019640 next_prio=24
+        rtos_obj-1 [000] ....   614.506031: tracing_mark_write: C|1|mutex:TestMutex|1
+mutexB|task_mutex_b-604021104 [000] ....   614.510154: sched_switch: prev_comm=mutexB|task_mutex_b prev_pid=604021104 prev_prio=24 prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
+        rtos_obj-1 [000] ....   614.510154: tracing_mark_write: C|1|mutex:TestMutex|0
+        rtos_obj-1 [000] ....   614.512741: tracing_mark_write: C|1|sem:TestSem|1
+semWait|task_sem_wait-604022568 [000] ....   614.516284: sched_switch: prev_comm=semWait|task_sem_wait prev_pid=604022568 prev_prio=24 prev_state=D ==> next_comm=bsemWait|task_bsem_wait next_pid=604024032 next_prio=24
+        rtos_obj-1 [000] ....   614.516284: tracing_mark_write: C|1|sem:TestSem|0
+producer|task_producer-604026960 [000] ....   614.528683: sched_switch: prev_comm=producer|task_producer prev_pid=604026960 prev_prio=24 prev_state=S ==> next_comm=blinkTask|blink_task next_pid=604027912 next_prio=24
+           <...>-0 [000] ....  1094.505372: tracing_mark_write: C|0|signal_1|45
+           <...>-0 [000] ....  1094.505667: tracing_mark_write: C|0|signal_2|207
 ```
 
 ##### Visualization

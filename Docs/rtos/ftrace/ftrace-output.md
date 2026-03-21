@@ -75,24 +75,34 @@ Without `-w`, all switches show `R` (no way to distinguish blocked vs preempted)
 
 ### Real Examples
 
-**RTX5** (preempted, R):
+**FreeRTOS** — preempted by higher priority (R):
 ```
-UNNAMED|osRtxIdleThread-604316640 [000] ....     0.000000: sched_switch: prev_comm=UNNAMED|osRtxIdleThread prev_pid=604316640 prev_prio=1 prev_state=R ==> next_comm=PE_GPIO_TOOLS|supv_digester_runner next_pid=604235520 next_prio=9
-```
-
-**RTX5** (sleeping, S):
-```
-PE_GPIO_TOOLS|supv_digester_runner-604235520 [000] ....     0.010821: sched_switch: prev_comm=PE_GPIO_TOOLS|supv_digester_runner prev_pid=604235520 prev_prio=9 prev_state=S ==> next_comm=UNNAMED|osRtxIdleThread next_pid=604316640 next_prio=1
+mutexA|task_mutex_a-604019640 [000] ....  1668.583580: sched_switch: prev_comm=mutexA|task_mutex_a prev_pid=604019640 prev_prio=24 prev_state=R ==> next_comm=autotestTask|autotest_task next_pid=604032448 next_prio=25
 ```
 
-**FreeRTOS** (blocked on object, D):
+**FreeRTOS** — sleeping after `vTaskDelay` (S):
 ```
-mutexB|task_mutex_b-604021104 [000] ....   614.508512: sched_switch: prev_comm=mutexB|task_mutex_b prev_pid=604021104 prev_prio=24 prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
+blinkTask|blink_task-604027912 [000] ....   614.533882: sched_switch: prev_comm=blinkTask|blink_task prev_pid=604027912 prev_prio=24 prev_state=S ==> next_comm=mutexA|task_mutex_a next_pid=604019640 next_prio=24
 ```
 
-**Zephyr** (blocked on object, D):
+**FreeRTOS** — blocked on mutex (D):
 ```
-mutex_b_tid|task_mutex_b-603981008 [000] ....     0.000000: sched_switch: prev_comm=mutex_b_tid|task_mutex_b prev_pid=603981008 prev_prio=5 prev_state=D ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
+mutexB|task_mutex_b-604021104 [000] ....   614.510154: sched_switch: prev_comm=mutexB|task_mutex_b prev_pid=604021104 prev_prio=24 prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
+```
+
+**Zephyr** — preempted, round-robin (R):
+```
+mutex_a_tid|task_mutex_a-603981200 [000] ....     0.116787: sched_switch: prev_comm=mutex_a_tid|task_mutex_a prev_pid=603981200 prev_prio=5 prev_state=R ==> next_comm=producer_tid|task_producer next_pid=603980048 next_prio=5
+```
+
+**Zephyr** — sleeping after `k_sleep` (S):
+```
+producer_tid|task_producer-603980048 [000] ....     2.366437: sched_switch: prev_comm=producer_tid|task_producer prev_pid=603980048 prev_prio=5 prev_state=S ==> next_comm=mutex_b_tid|task_mutex_b next_pid=603981008 next_prio=5
+```
+
+**Zephyr** — blocked on mutex (D):
+```
+mutex_b_tid|task_mutex_b-603981008 [000] ....     2.235023: sched_switch: prev_comm=mutex_b_tid|task_mutex_b prev_pid=603981008 prev_prio=5 prev_state=D ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
 ```
 
 ---
@@ -131,21 +141,60 @@ Requires `-w rtos_obj_trace`.
 - **Zephyr**: Always hex address (e.g. `mutex:0x24000090`).
   Zephyr kernel objects have no name fields.
 
-### Real Examples
+### Real Examples — Acquire/Release Pairs
 
-**FreeRTOS** (named objects):
+**FreeRTOS** — mutex (named via `vQueueAddToRegistry`):
 ```
-rtos_obj-1 [000] ....   614.504467: tracing_mark_write: C|1|mutex:TestMutex|1
-rtos_obj-1 [000] ....   614.511109: tracing_mark_write: C|1|sem:TestSem|1
-rtos_obj-1 [000] ....   614.517153: tracing_mark_write: C|1|sem:TestBSem|1
+        rtos_obj-1 [000] ....   621.705868: tracing_mark_write: C|1|mutex:TestMutex|1
+        rtos_obj-1 [000] ....   628.464283: tracing_mark_write: C|1|mutex:TestMutex|0
 ```
 
-**Zephyr** (hex addresses only):
+**FreeRTOS** — semaphore (named):
 ```
-rtos_obj-1 [000] ....     7.002886: tracing_mark_write: C|1|mutex:0x24000090|1
-rtos_obj-1 [000] ....    35.080998: tracing_mark_write: C|1|sem:0x240000E8|1
-rtos_obj-1 [000] ....    35.092332: tracing_mark_write: C|1|msgqueue:0x240000A8|1
-rtos_obj-1 [000] ....    35.086764: tracing_mark_write: C|1|evtflags:0x24000DC8|1
+        rtos_obj-1 [000] ....   614.512741: tracing_mark_write: C|1|sem:TestSem|1
+        rtos_obj-1 [000] ....   614.516284: tracing_mark_write: C|1|sem:TestSem|0
+```
+
+**FreeRTOS** — binary semaphore (named):
+```
+        rtos_obj-1 [000] ....   614.518883: tracing_mark_write: C|1|sem:TestBSem|1
+        rtos_obj-1 [000] ....   614.522390: tracing_mark_write: C|1|sem:TestBSem|0
+```
+
+**FreeRTOS** — queue (unnamed):
+```
+        rtos_obj-1 [000] ....  1677.526053: tracing_mark_write: C|1|queue:0x2400DF08|1
+        rtos_obj-1 [000] ....  1677.527760: tracing_mark_write: C|1|queue:0x2400DF08|0
+```
+
+**FreeRTOS** — recursive mutex (unnamed):
+```
+        rtos_obj-1 [000] ....  2177.550138: tracing_mark_write: C|1|rmutex:0x2400CFE8|1
+        rtos_obj-1 [000] ....  2177.550138: tracing_mark_write: C|1|rmutex:0x2400CFE8|0
+```
+
+**Zephyr** — mutex (hex address):
+```
+        rtos_obj-1 [000] ....     2.235014: tracing_mark_write: C|1|mutex:0x24000090|1
+        rtos_obj-1 [000] ....     2.235023: tracing_mark_write: C|1|mutex:0x24000090|0
+```
+
+**Zephyr** — semaphore:
+```
+        rtos_obj-1 [000] ....     2.600209: tracing_mark_write: C|1|sem:0x240000E8|1
+        rtos_obj-1 [000] ....     2.775444: tracing_mark_write: C|1|sem:0x240000E8|0
+```
+
+**Zephyr** — event flags:
+```
+        rtos_obj-1 [000] ....     2.395712: tracing_mark_write: C|1|evtflags:0x24000DC8|1
+        rtos_obj-1 [000] ....     2.395721: tracing_mark_write: C|1|evtflags:0x24000DC8|0
+```
+
+**Zephyr** — message queue:
+```
+        rtos_obj-1 [000] ....     2.600233: tracing_mark_write: C|1|msgqueue:0x240000A8|1
+        rtos_obj-1 [000] ....     2.775439: tracing_mark_write: C|1|msgqueue:0x240000A8|0
 ```
 
 ---
@@ -165,9 +214,11 @@ The `<value>` is the 32-bit word written to the stimulus register.
 
 ### Real Example
 
-**FreeRTOS** (ITM channel 1):
+**FreeRTOS** — burst of ITM stimulus channels (31 signals):
 ```
-           <...>-0 [000] ....  1094.504029: tracing_mark_write: C|0|signal_1|45
+           <...>-0 [000] ....  1094.505372: tracing_mark_write: C|0|signal_1|45
+           <...>-0 [000] ....  1094.505667: tracing_mark_write: C|0|signal_2|207
+           <...>-0 [000] ....  1094.505954: tracing_mark_write: C|0|signal_3|70
 ```
 
 ---
