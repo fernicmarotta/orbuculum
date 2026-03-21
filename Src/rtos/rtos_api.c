@@ -7,6 +7,7 @@
 #include "rtos_support.h"
 #include <rtos/rtx5/rtx5.h>
 #include <rtos/freertos/freertos.h>
+#include <rtos/zephyr/zephyr.h>
 #include <output_handler.h>
 #include "uthash.h"
 
@@ -25,6 +26,7 @@ struct rtosRegistry {
 static const struct rtosRegistry rtos_registry[] = {
     { "rtx5",     "rtxv5",    RTOS_RTX5,     rtx5GetOps     },
     { "freertos", "FreeRTOS", RTOS_FREERTOS, freertosGetOps },
+    { "zephyr",   "Zephyr",   RTOS_ZEPHYR,   zephyrGetOps   },
     { NULL, NULL, RTOS_NONE, NULL }
 };
 
@@ -47,6 +49,9 @@ struct unresolvedFunc {
     UT_hash_handle hh;
 };
 static struct unresolvedFunc *unresolvedFuncs = NULL;
+
+static struct rtosThread *find_or_create_thread(struct rtosState *rtos, struct SymbolSet *symbols,
+                                                 uint32_t tcb_addr, int telnet_port);
 
 /* Sort functions for threads */
 static int cpu_usage_sort_desc(void *a, void *b) 
@@ -121,7 +126,7 @@ struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *reque
     if (!reg)
     {
         genericsReport(V_ERROR, "Unknown RTOS type: %s" EOL, requested_type);
-        genericsReport(V_ERROR, "Supported: rtx5, freertos" EOL);
+        genericsReport(V_ERROR, "Supported: rtx5, freertos, zephyr" EOL);
         return NULL;
     }
 
@@ -164,6 +169,21 @@ struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *reque
         uint32_t wp_addr = rtos->ops->get_watchpoint_addr(rtos);
         if (wp_addr)
         {
+            /* Pre-seed the current thread before DWT is active.
+             * The micro is already running, so read who is executing
+             * right now to avoid "unknown" on the first context switch. */
+            uint32_t current_tcb = rtosReadMemoryWord(wp_addr);
+            if (current_tcb && current_tcb != 0xFFFFFFFF)
+            {
+                struct rtosThread *thread = find_or_create_thread(rtos, symbols, current_tcb, options_telnetPort);
+                if (thread)
+                {
+                    rtos->current_thread = current_tcb;
+                    genericsReport(V_INFO, "Current thread at connect: 0x%08X (%s)" EOL,
+                                  current_tcb, thread->name);
+                }
+            }
+
             genericsReport(V_INFO, "Configuring DWT watchpoint at 0x%08X" EOL, wp_addr);
             rtosConfigureDWT(wp_addr);
         }
@@ -571,8 +591,8 @@ static void printThreadRow(FILE *f, struct ColumnWidths *widths, struct rtosThre
             widths->max, thread->max_cpu_percent / 100.0,
             widths->switches, thread->window_switches);
     } else {
-        uint64_t time_ms = thread->accumulated_cycles > 0 
-            ? (thread->accumulated_cycles * 1000) / rtos->cpu_freq
+        uint64_t time_ms = (thread->accumulated_cycles > 0 && rtos->total_cycles > 0)
+            ? (thread->accumulated_cycles * (window_time_us / 1000)) / rtos->total_cycles
             : thread->accumulated_time_us / 1000;
         fprintf(f, "| %-*s | 0x%08X | %-*s | %-*s | %*" PRIu64 " | %*.3f | %*.3f | %*" PRIu64 " |\n",
             widths->name, thread->name,
@@ -728,53 +748,74 @@ void rtosUpdateThreadCpuMetrics(struct rtosState *rtos, uint64_t window_time_us)
     struct rtosThread *thread, *tmp;
     uint64_t active_accum_us = 0;
     uint64_t total_accum_us = 0;
+    uint64_t total_cycles = 0;
+    uint64_t active_cycles = 0;
     bool has_idle_concept = false;
-    
-    /* Calculate CPU percentages and update max values for all threads */
-    HASH_ITER(hh, rtos->threads, thread, tmp) 
+
+    /* First pass: calculate total cycles for normalization */
+    HASH_ITER(hh, rtos->threads, thread, tmp)
     {
-        /* Calculate CPU percentage with proper scaling to avoid overflow */
+        total_cycles += thread->accumulated_cycles;
+    }
+
+    /* Calculate CPU percentages and update max values for all threads */
+    HASH_ITER(hh, rtos->threads, thread, tmp)
+    {
+        /* Use cycle-based normalization when available (matches console output) */
         uint32_t cpu_pct = 0;
-        if (window_time_us > 0)
+        if (thread->accumulated_cycles > 0 && total_cycles > 0)
+        {
+            cpu_pct = (uint32_t)((thread->accumulated_cycles * 10000ULL) / total_cycles);
+        }
+        else if (window_time_us > 0 && thread->accumulated_time_us > 0)
         {
             uint64_t temp = (uint64_t)thread->accumulated_time_us * 10000ULL;
             cpu_pct = (uint32_t)(temp / window_time_us);
-            if (cpu_pct > 10000) cpu_pct = 10000;  /* Cap at 100% */
         }
-        
+        if (cpu_pct > 10000) cpu_pct = 10000;
+
         /* Update max CPU percentage */
         if (cpu_pct > thread->max_cpu_percent)
         {
             thread->max_cpu_percent = cpu_pct;
         }
-        
+
         /* Track totals for overall CPU usage calculation */
         total_accum_us += thread->accumulated_time_us;
-        
+
         /* Check if this is an idle thread using RTOS-specific method */
         bool is_idle = false;
         if (rtos->ops && rtos->ops->is_idle_thread)
         {
             is_idle = rtos->ops->is_idle_thread(thread);
         }
-        
+
         if (!is_idle)
         {
             active_accum_us += thread->accumulated_time_us;
+            active_cycles += thread->accumulated_cycles;
         }
         else
         {
             has_idle_concept = true;
         }
     }
-    
+
     /* Update overall CPU usage max if we have idle thread concept */
     if (has_idle_concept)
     {
-        uint64_t temp = (uint64_t)active_accum_us * 10000ULL;
-        uint32_t cpu_usage_pct = (uint32_t)(temp / window_time_us);
+        uint32_t cpu_usage_pct;
+        if (total_cycles > 0)
+        {
+            cpu_usage_pct = (uint32_t)((active_cycles * 10000ULL) / total_cycles);
+        }
+        else
+        {
+            uint64_t temp = (uint64_t)active_accum_us * 10000ULL;
+            cpu_usage_pct = (uint32_t)(temp / window_time_us);
+        }
         if (cpu_usage_pct > 10000) cpu_usage_pct = 10000;
-        
+
         if (cpu_usage_pct > rtos->max_cpu_usage)
         {
             rtos->max_cpu_usage = cpu_usage_pct;

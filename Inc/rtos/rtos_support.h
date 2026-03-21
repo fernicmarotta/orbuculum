@@ -59,6 +59,7 @@ enum rtosType {
     RTOS_NONE = 0,
     RTOS_RTX5,
     RTOS_FREERTOS,
+    RTOS_ZEPHYR,
     RTOS_UNKNOWN
 };
 
