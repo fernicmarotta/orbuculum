@@ -328,38 +328,42 @@ Click a slice to see details including "End State", priority, and duration.
 
 ![FreeRTOS overview](perfetto_freertos_overview.png)
 
-Full trace overview: CPU scheduling track, 20+ object counter tracks under
-Process 1 (`mutex:TestMutex`, `queue:*`, `rmutex:*`, `sem:*`), and thread
-swim lanes below. Named objects use `vQueueAddToRegistry()` names.
+Full trace overview (~20 s, STM32H7 480 MHz): CPU scheduling track, 20+ object
+counter tracks under Process 1 (`mutex:TestMutex`, `queue:*`, `rmutex:*`,
+`sem:*`), and thread swim lanes below. Named objects use
+`vQueueAddToRegistry()` names.
 
 ![FreeRTOS object counter tracks](perfetto_freertos_zoomed_40ms.png)
 
-Zoomed view (~3 min window) showing object blocking events. Counter tracks
+Zoomed view (~8 s window) showing object blocking events. Counter tracks
 show value=1 (purple bar) during blocking: `mutex:TestMutex` with periodic
-contention, `sem:0x24009788` with long blocking periods, and `queue:0x24010EC8`
-with rapid acquire/release cycles.
+contention (~15 ms cycle), and several `queue:*`/`sem:*` tracks with
+varying blocking patterns.
 
 ![FreeRTOS thread swim lanes](perfetto_freertos_threads_40ms.png)
 
 Thread swim lanes at the same zoom level. `sem:TestBSem` and `sem:TestSem`
-counter tracks visible above, with `mutexA|task_mutex_a` (dense gray = nearly
-always running), `autotestTask` (teal), `mutexB|task_mutex_b` (blue, intermittent).
+counter tracks visible above, with `mutexA|task_mutex_a` (gray, frequently
+running), `autotestTask` (teal, dominant), `mutexB|task_mutex_b` (blue,
+intermittent), `TCP/IP|netTaskEx` (cyan), `semWait|task_sem_wait` (purple).
 
-![FreeRTOS CPU Sched Slice detail](perfetto_freertos_dstate_selected.png)
+![FreeRTOS object counter tracks detail](perfetto_freertos_dstate_selected.png)
 
-Detail panel for a CPU Sched Slice: Thread `mutexA|task_mutex_a [604019640]`,
-Priority 24 (real-time), Duration 461ms, End State shown. Click any scheduling
-slice to inspect its process, thread, timing, and end state.
+Zoomed view (~1.5 s window) of Process 1 counter tracks: `mutex:TestMutex`
+with periodic blocking pulses, `queue:0x2400DF08`, `queue:0x240107C8`,
+`queue:0x24010EC8`, `rmutex:0x2400CFE8`, and `sem:0x24006960`. Click any
+scheduling slice to inspect its process, thread, timing, and end state.
 
 ### Zephyr Example -- sched_switch + object tracking
 
 ![Zephyr object tracking](perfetto_zephyr_dstate.png)
 
-Zephyr trace (~3s window) with all four object types under Process 1:
-`mutex:0x24000090` (dense contention), `sem:0x240000E8`, `evtflags:0x24000DC8`,
-`msgqueue:0x240000A8`. All names are hex addresses (Zephyr objects have no name
-fields). Thread swim lanes show `mutex_a_tid`, `mutex_b_tid` (very active),
-`producer_tid`, `msgq_tid`, `event_tid`, `bsem_tid`, `sem_tid`.
+Zephyr trace (~12 s, STM32H743 480 MHz) with all four object types under
+Process 1: `evtflags:0x24000DC8`, `msgqueue:0x240000A8`,
+`mutex:0x24000090` (dense contention), `sem:0x240000E8`. All names are hex
+addresses (Zephyr objects have no name fields). Thread swim lanes below show
+`mutex_a_tid`, `mutex_b_tid`, `producer_tid`, `msgq_tid`, `event_tid`,
+`bsem_tid`, `sem_tid`, `main`.
 
 ### Counter Track Groups
 
