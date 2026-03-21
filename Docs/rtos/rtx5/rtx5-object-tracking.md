@@ -2,10 +2,16 @@
 
 ## Overview
 
-`orbtop-rtos` can track RTOS kernel object blocking events (mutex, semaphore,
-event flags, message queue, memory pool) on ARM RTX5 targets. When a thread
-blocks on an object, the event is captured via a DWT watchpoint and displayed
-in ftrace output with `prev_state=D` (`sched_switch`) and a named counter track (`tracing_mark_write`).
+`orbtop-rtos` can track RTOS kernel object blocking and release events
+(mutex, semaphore, event flags, message queue, memory pool) on ARM RTX5
+targets. When a thread blocks on an object, the event is captured via a
+DWT watchpoint and displayed in ftrace output with `prev_state=D`
+(`sched_switch`) and a named counter track (`tracing_mark_write`).
+
+Optional release hooks provide precise contention timing: the counter track
+stays high from the blocking event until the object is actually released,
+allowing you to distinguish contention time from scheduling latency in
+Perfetto.
 
 ## Architecture
 
@@ -34,6 +40,20 @@ in ftrace output with `prev_state=D` (`sched_switch`) and a named counter track 
                                        C|1|mutex:MyMutex|0
 ```
 
+## Type Encoding (bits [2:0])
+
+The DWT comp2 value uses bit [2] for acquire/release signaling. RTX5
+control blocks have an `id` byte at offset 0 that the host reads via
+telnet — no firmware type hint in bits [1:0] is needed (always 0).
+
+```
+[31:3] = object address
+[2]    = 0: acquire (blocking), 1: release
+[1:0]  = 00 (unused — type from control block id byte)
+```
+
+The host strips bits [2:0] (`& ~7u`) to recover the real address.
+
 ## Supported Object Types
 
 RTX5 uses a common control block header with an ID byte at offset 0:
@@ -59,11 +79,11 @@ the RTX5 kernel source). They are compiled **only** when the corresponding
 
 | Macro in `RTX_Config.h` | Enables callbacks for |
 |---|---|
-| `OS_EVR_MUTEX = 1` | `EvrRtxMutexAcquirePending` |
-| `OS_EVR_SEMAPHORE = 1` | `EvrRtxSemaphoreAcquirePending` |
-| `OS_EVR_EVFLAGS = 1` | `EvrRtxEventFlagsWaitPending` |
-| `OS_EVR_MSGQUEUE = 1` | `EvrRtxMessageQueueGetPending`, `*PutPending`, `*InsertPending` |
-| `OS_EVR_MEMPOOL = 1` | `EvrRtxMemoryPoolAllocPending` |
+| `OS_EVR_MUTEX = 1` | `EvrRtxMutexAcquirePending`, `EvrRtxMutexReleased` |
+| `OS_EVR_SEMAPHORE = 1` | `EvrRtxSemaphoreAcquirePending`, `EvrRtxSemaphoreReleased` |
+| `OS_EVR_EVFLAGS = 1` | `EvrRtxEventFlagsWaitPending`, `EvrRtxEventFlagsSet` |
+| `OS_EVR_MSGQUEUE = 1` | `EvrRtxMessageQueue*Pending`, `*Inserted`, `*Retrieved` |
+| `OS_EVR_MEMPOOL = 1` | `EvrRtxMemoryPoolAllocPending`, `*Deallocated` |
 | `OS_EVR_WAIT = 1` | `EvrRtxDelay`, `EvrRtxDelayUntil` |
 
 Additionally, `EVR_RTX_DISABLE` must **not** be defined (it disables all
@@ -82,6 +102,12 @@ Create a source file (e.g. `rtos_obj_trace.c`) and add it to your build:
 #include <stdint.h>
 
 volatile uint32_t rtos_obj_trace;
+
+#define RTX5_RELEASE_BIT 4u   /* bit [2] = release event */
+
+/* ================================================================
+ * Blocking hooks (acquire) — override __WEAK stubs in rtx_evr.c
+ * ================================================================ */
 
 void EvrRtxMutexAcquirePending(void *mutex_id, uint32_t timeout)
 {
@@ -140,15 +166,67 @@ void EvrRtxDelayUntil(uint32_t ticks)
     (void)ticks;
     rtos_obj_trace = 0;
 }
+
+/* ================================================================
+ * Release hooks (optional — enables precise contention timing)
+ * ================================================================ */
+
+void EvrRtxMutexReleased(void *mutex_id, uint32_t lock)
+{
+    (void)lock;
+    rtos_obj_trace = (uint32_t)mutex_id | RTX5_RELEASE_BIT;
+}
+
+void EvrRtxSemaphoreReleased(void *semaphore_id, uint32_t tokens)
+{
+    (void)tokens;
+    rtos_obj_trace = (uint32_t)semaphore_id | RTX5_RELEASE_BIT;
+}
+
+void EvrRtxEventFlagsSet(void *ef_id, uint32_t flags)
+{
+    (void)flags;
+    rtos_obj_trace = (uint32_t)ef_id | RTX5_RELEASE_BIT;
+}
+
+void EvrRtxMessageQueueInserted(void *mq_id, const void *msg_ptr)
+{
+    (void)msg_ptr;
+    rtos_obj_trace = (uint32_t)mq_id | RTX5_RELEASE_BIT;
+}
+
+void EvrRtxMessageQueueRetrieved(void *mq_id, void *msg_ptr)
+{
+    (void)msg_ptr;
+    rtos_obj_trace = (uint32_t)mq_id | RTX5_RELEASE_BIT;
+}
+
+void EvrRtxMemoryPoolDeallocated(void *mp_id, void *block)
+{
+    (void)block;
+    rtos_obj_trace = (uint32_t)mp_id | RTX5_RELEASE_BIT;
+}
 ```
 
 These functions are `__WEAK`-linked RTX5 event recorder callbacks defined in
 `rtx_evr.c`. The RTX kernel calls them automatically when a thread is about
-to block. Our implementations override the weak stubs with a single write
-to `rtos_obj_trace`, which triggers DWT comparator 2.
+to block (acquire) or when an object operation completes (release). Our
+implementations override the weak stubs with a single write to
+`rtos_obj_trace`, which triggers DWT comparator 2.
+
+**Blocking hooks** (acquire): bit [2]=0. The host emits `C|1` and sets
+`prev_state=D` in ftrace.
+
+**Release hooks** (optional): bit [2]=1. The host emits `C|0` at the exact
+release time. Without release hooks, `C|0` is emitted at the next context
+switch — still functional but less precise.
 
 Writing `0` (in `EvrRtxDelay`/`EvrRtxDelayUntil`) signals a voluntary delay,
 which produces `prev_state=S` in ftrace output.
+
+**Note**: Release hooks are optional and auto-detected per object. Firmware
+without release hooks works exactly as before (backward compatible). All
+`os*Id_t` types (e.g. `osMutexId_t`) are `void*` in CMSIS-RTOS2.
 
 
 ### 2. OpenOCD configuration
@@ -186,6 +264,22 @@ orbtop-rtos \
 The `-w rtos_obj_trace` option tells orbtop-rtos to look up the symbol address
 in the ELF and configure DWT comparator 2 via `rtos_dwt2_config`.
 
+## How It Works Internally
+
+### Release auto-detection
+
+The host auto-detects per object whether firmware has release hooks:
+
+- **First blocking cycle**: `has_release_hooks` is false. The `C|0` is
+  emitted at the context switch (backward compatible).
+- **First release event**: sets `has_release_hooks = true` permanently
+  for that object. From then on, `C|0` is emitted at release time, and
+  the counter stays high through context switches.
+
+This means the first cycle for each object uses backward-compatible timing.
+All subsequent cycles show precise contention (counter high from blocking
+to release).
+
 ## Ftrace Output
 
 Thread switches with blocking show `prev_state=D`:
@@ -197,6 +291,13 @@ Object events appear as counter tracks:
 ```
 rtos_obj-1 [000] .... 1.000: tracing_mark_write: C|1|mutex:MyMutex|1
 rtos_obj-1 [000] .... 1.050: tracing_mark_write: C|1|mutex:MyMutex|0
+```
+
+With release hooks enabled, the `C|0` appears at the actual release time
+(not at the context switch), showing precise contention duration:
+```
+rtos_obj-1 [000] .... 1.000: tracing_mark_write: C|1|mutex:MyMutex|1
+rtos_obj-1 [000] .... 1.080: tracing_mark_write: C|1|mutex:MyMutex|0
 ```
 
 In Perfetto, these render as named counter tracks showing when each object

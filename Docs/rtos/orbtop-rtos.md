@@ -962,9 +962,16 @@ The ITM generates timestamp packets:
 - Global timestamps: Periodic full timestamp sync
 - Prescaler affects resolution (typically /4 or /16 of CPU clock)
 
-With proper prescaler settings:
-- Resolution: ~microsecond level
-- Used to calculate accurate thread execution times
+The accumulated `_r.timeStamp` is in **raw CPU clock ticks** (affected by prescaler). For
+ftrace output and per-thread time accounting, ticks are converted to microseconds using the
+CPU frequency specified with `-F`:
+
+```c
+// ticks_to_us() in rtos_support.h
+uint64_t us = ticks / (cpu_freq / 1000000);
+```
+
+This produces the standard ftrace `seconds.microseconds` timestamp format (6 decimal places).
 - Window-based statistics reset every interval
 
 #### Thread Statistics Calculation

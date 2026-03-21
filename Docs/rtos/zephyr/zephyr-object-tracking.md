@@ -2,11 +2,13 @@
 
 ## Overview
 
-`orbtop-rtos` can track Zephyr kernel object blocking events (mutex,
-semaphore, message queue, event) on ARM Cortex-M targets. When a thread
-blocks on a kernel object, the event is captured via a DWT watchpoint and
-displayed in ftrace output with `prev_state=D` (`sched_switch`) and a named
-counter track.
+`orbtop-rtos` can track Zephyr kernel object blocking and release events
+(mutex, semaphore, message queue, event, pipe, mailbox, mem_slab, condvar,
+stack) on ARM Cortex-M targets. When a thread blocks on a kernel object,
+the event is captured via a DWT watchpoint and displayed in ftrace output
+with `prev_state=D` (`sched_switch`) and a named counter track. Release
+events show when the object is unlocked, allowing separation of contention
+time from scheduling latency.
 
 ## Architecture
 
@@ -37,39 +39,53 @@ counter track.
 
 ## Type Encoding
 
-Zephyr kernel objects (`k_mutex`, `k_sem`, `k_msgq`,
-`k_event`) have no common type identifier.  The firmware encodes the object
-type in bits [1:0] of the address written to `rtos_obj_trace`:
+Zephyr kernel objects have no common type identifier.  The firmware encodes
+the object type and acquire/release direction in bits [2:0] of the address
+written to `rtos_obj_trace`:
 
-| bits [1:0] | Type tag | Object          | Prefix     | Example output        |
-|------------|----------|-----------------|------------|-----------------------|
-| 00         | MUTEX    | `k_mutex`       | `mutex`    | `mutex:0x20001234`    |
-| 01         | SEM      | `k_sem`         | `sem`      | `sem:0x20005678`      |
-| 10         | MSGQ     | `k_msgq`        | `msgqueue` | `msgqueue:0x2000ABCD` |
-| 11         | EVENT    | `k_event`       | `evtflags` | `evtflags:0x2000EF00` |
-| value = 0  | —        | delay / sleep   | —          | `prev_state=S`        |
+```
+[31:3] = object address
+[2]    = 0: acquire (blocking), 1: release (unlock/give/post)
+[1:0]  = type tag (00:mutex, 01:sem, 10:msgq, 11:event)
+```
 
-Since all Cortex-M heap/BSS addresses are word-aligned, bits [1:0] are always
-0 in real pointers.  The host strips these bits to recover the actual address.
+| bits [1:0] | Type tag | Objects                                       | Prefix     |
+|------------|----------|-----------------------------------------------|------------|
+| 00         | MUTEX    | `k_mutex`                                      | `mutex`    |
+| 01         | SEM      | `k_sem`                                        | `sem`      |
+| 10         | MSGQ     | `k_msgq`, `k_pipe`, `k_mbox`, `k_mem_slab`, `k_stack` | `msgqueue` |
+| 11         | EVENT    | `k_event`, `k_condvar`                          | `evtflags` |
+| value = 0  | —        | delay / sleep                                   | —          |
+
+Since all Cortex-M SRAM addresses are at least 4-byte aligned, bits [2:0]
+are always 0 in real pointers.  The host strips these bits to recover the
+actual address.
 
 ### Objects grouped under MSGQ (tag 10)
 
-| Zephyr Object   | Hook                                           |
-|------------------|------------------------------------------------|
-| `k_msgq`         | `sys_port_trace_k_msgq_get_blocking`           |
-| `k_msgq`         | `sys_port_trace_k_msgq_put_blocking`           |
-| `k_pipe`         | `sys_port_trace_k_pipe_get_blocking`           |
-| `k_pipe`         | `sys_port_trace_k_pipe_put_blocking`           |
-| `k_mbox`         | `sys_port_trace_k_mbox_message_put_blocking`   |
-| `k_mbox`         | `sys_port_trace_k_mbox_message_get_blocking`   |
-| `k_mem_slab`     | `sys_port_trace_k_mem_slab_alloc_blocking`     |
+| Zephyr Object | Blocking hook                                  | Release hook                                       |
+|---------------|------------------------------------------------|----------------------------------------------------|
+| `k_msgq`      | `sys_port_trace_k_msgq_get_blocking`           | `sys_port_trace_k_msgq_get_exit`                   |
+| `k_msgq`      | `sys_port_trace_k_msgq_put_blocking`           | `sys_port_trace_k_msgq_put_exit`                   |
+| `k_pipe`      | `sys_port_trace_k_pipe_read_blocking`          | `sys_port_trace_k_pipe_read_exit`                  |
+| `k_pipe`      | `sys_port_trace_k_pipe_write_blocking`         | `sys_port_trace_k_pipe_write_exit`                 |
+| `k_mbox`      | `sys_port_trace_k_mbox_message_put_blocking`   | `sys_port_trace_k_mbox_message_put_exit`           |
+| `k_mbox`      | `sys_port_trace_k_mbox_get_blocking`           | `sys_port_trace_k_mbox_get_exit`                   |
+| `k_mem_slab`  | `sys_port_trace_k_mem_slab_alloc_blocking`     | `sys_port_trace_k_mem_slab_free_exit`              |
+| `k_stack`     | `sys_port_trace_k_stack_pop_blocking`          | `sys_port_trace_k_stack_push_exit`                 |
 
 ### Objects grouped under EVENT (tag 11)
 
-| Zephyr Object   | Hook                                           |
-|------------------|------------------------------------------------|
-| `k_event`        | `sys_port_trace_k_event_wait_blocking`         |
-| `k_condvar`      | `sys_port_trace_k_condvar_wait_blocking`       |
+| Zephyr Object | Blocking hook                                  | Release hook                                       |
+|---------------|------------------------------------------------|----------------------------------------------------|
+| `k_event`     | `sys_port_trace_k_event_wait_blocking`         | `sys_port_trace_k_event_post_exit`                 |
+| `k_condvar`   | `sys_port_trace_k_condvar_wait_blocking`       | `sys_port_trace_k_condvar_signal_exit`             |
+| `k_condvar`   |                                                | `sys_port_trace_k_condvar_broadcast_exit`          |
+
+### Not trackable
+
+`k_fifo`, `k_lifo`, `k_poll`, `k_heap`, `k_timer`, `k_thread_join` — these
+have no `_blocking` hook in the Zephyr tracing API.
 
 ## prev_state Mapping
 
@@ -158,10 +174,16 @@ would run before the real header finishes, letting Zephyr overwrite them.
 
 extern volatile uint32_t rtos_obj_trace;
 
+/* Type tags — bits [1:0] */
 #define ZEPHYR_OBJ_MUTEX  0u  /* 00 */
 #define ZEPHYR_OBJ_SEM    1u  /* 01 */
 #define ZEPHYR_OBJ_MSGQ   2u  /* 10 */
 #define ZEPHYR_OBJ_EVENT  3u  /* 11 */
+
+/* Release flag — bit [2] */
+#define ZEPHYR_RELEASE_BIT 4u
+
+/* === Blocking hooks (acquire) === */
 
 #undef sys_port_trace_k_mutex_lock_blocking
 #define sys_port_trace_k_mutex_lock_blocking(mutex, timeout) \
@@ -183,15 +205,94 @@ extern volatile uint32_t rtos_obj_trace;
 #define sys_port_trace_k_event_wait_blocking(event, events, options, timeout) \
     do { rtos_obj_trace = (uint32_t)(event) | ZEPHYR_OBJ_EVENT; } while (0)
 
+#undef sys_port_trace_k_pipe_read_blocking
+#define sys_port_trace_k_pipe_read_blocking(pipe, timeout) \
+    do { rtos_obj_trace = (uint32_t)(pipe) | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_pipe_write_blocking
+#define sys_port_trace_k_pipe_write_blocking(pipe, timeout) \
+    do { rtos_obj_trace = (uint32_t)(pipe) | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_mbox_get_blocking
+#define sys_port_trace_k_mbox_get_blocking(mbox, timeout) \
+    do { rtos_obj_trace = (uint32_t)(mbox) | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_mbox_message_put_blocking
+#define sys_port_trace_k_mbox_message_put_blocking(mbox, timeout) \
+    do { rtos_obj_trace = (uint32_t)(mbox) | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_mem_slab_alloc_blocking
+#define sys_port_trace_k_mem_slab_alloc_blocking(slab, timeout) \
+    do { rtos_obj_trace = (uint32_t)(slab) | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_condvar_wait_blocking
+#define sys_port_trace_k_condvar_wait_blocking(condvar, timeout) \
+    do { rtos_obj_trace = (uint32_t)(condvar) | ZEPHYR_OBJ_EVENT; } while (0)
+
+#undef sys_port_trace_k_stack_pop_blocking
+#define sys_port_trace_k_stack_pop_blocking(stack, timeout) \
+    do { rtos_obj_trace = (uint32_t)(stack) | ZEPHYR_OBJ_MSGQ; } while (0)
+
 #undef sys_port_trace_k_thread_sleep_enter
 #define sys_port_trace_k_thread_sleep_enter(timeout) \
     do { rtos_obj_trace = 0; } while (0)
 
+/* === Release hooks === */
+
+#undef sys_port_trace_k_mutex_unlock_exit
+#define sys_port_trace_k_mutex_unlock_exit(mutex, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(mutex) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MUTEX; } while (0)
+
+#undef sys_port_trace_k_sem_give_exit
+#define sys_port_trace_k_sem_give_exit(sem) \
+    do { rtos_obj_trace = (uint32_t)(sem) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_SEM; } while (0)
+
+#undef sys_port_trace_k_msgq_put_exit
+#define sys_port_trace_k_msgq_put_exit(msgq, timeout, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(msgq) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_msgq_get_exit
+#define sys_port_trace_k_msgq_get_exit(msgq, timeout, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(msgq) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_event_post_exit
+#define sys_port_trace_k_event_post_exit(event, events, events_mask) \
+    do { rtos_obj_trace = (uint32_t)(event) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_EVENT; } while (0)
+
+#undef sys_port_trace_k_pipe_write_exit
+#define sys_port_trace_k_pipe_write_exit(pipe, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(pipe) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_pipe_read_exit
+#define sys_port_trace_k_pipe_read_exit(pipe, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(pipe) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_mbox_message_put_exit
+#define sys_port_trace_k_mbox_message_put_exit(mbox, timeout, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(mbox) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_mbox_get_exit
+#define sys_port_trace_k_mbox_get_exit(mbox, timeout, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(mbox) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_mem_slab_free_exit
+#define sys_port_trace_k_mem_slab_free_exit(slab) \
+    do { rtos_obj_trace = (uint32_t)(slab) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
+#undef sys_port_trace_k_condvar_signal_exit
+#define sys_port_trace_k_condvar_signal_exit(condvar, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(condvar) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_EVENT; } while (0)
+
+#undef sys_port_trace_k_condvar_broadcast_exit
+#define sys_port_trace_k_condvar_broadcast_exit(condvar, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(condvar) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_EVENT; } while (0)
+
+#undef sys_port_trace_k_stack_push_exit
+#define sys_port_trace_k_stack_push_exit(stack, ret) \
+    do { if ((ret) == 0) rtos_obj_trace = (uint32_t)(stack) | ZEPHYR_RELEASE_BIT | ZEPHYR_OBJ_MSGQ; } while (0)
+
 #endif
 ```
-
-Add more hooks as needed (pipes, mailbox, mem_slab, condvar) following
-the same pattern with the appropriate type tag.
 
 **How it works:** when Zephyr's kernel compiles `mutex.c` and does
 `#include <zephyr/tracing/tracing.h>`, it finds our wrapper first
@@ -261,18 +362,27 @@ proc rtos_dwt2_config {addr} {
 
 ### Type detection (firmware-side, via type tag)
 
-The object type is encoded by the firmware in bits [1:0] of the value
-written to `rtos_obj_trace`.
+The object type and acquire/release direction are encoded by the firmware
+in bits [2:0] of the value written to `rtos_obj_trace`.
 
 When `rtosHandleObjectEvent()` receives a DWT comp2 value:
 
-1. **Strip bits [1:0]** → `type_hint` (0–3) + `real_addr`
-2. **Store** `type_hint` in `rtos->pending_type_hint`
-3. **Call** `zephyr_read_object_info()` which maps `type_hint` to
-   `rtosObjectType` and prefix string
+1. **Strip bits [2:0]** → `is_release` (bit 2), `type_hint` (bits 1:0), `real_addr`
+2. If **release**: look up existing object, emit C|0 at release timestamp
+3. If **acquire**: store `type_hint` in `rtos->pending_type_hint`,
+   call `zephyr_read_object_info()` which maps `type_hint` to
+   `rtosObjectType` and prefix string, emit C|1
 
 No telnet memory reads are needed for type detection — the firmware
 already encoded the type.
+
+### Release event auto-detection
+
+The host auto-detects whether firmware has release hooks on a per-object
+basis.  The first blocking+context-switch cycle for each object uses
+backward-compatible behavior (C|0 at context switch).  Once a release
+event arrives for an object, subsequent cycles keep the counter high
+until the release, showing true contention time in Perfetto.
 
 ### Name resolution
 
