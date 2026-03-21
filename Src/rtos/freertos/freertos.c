@@ -660,6 +660,18 @@ static int freertos_read_object_info(struct rtosState *rtos, struct rtosObject *
     if (!rtos || !obj || !cb_addr)
         return -1;
 
+    /* StreamBuffer_t (type_hint=2): not a Queue_t, skip pcHead/ucQueueType validation.
+     * Stream buffers have no name registry — use hex address. */
+    if (rtos->pending_type_hint == 2)
+    {
+        obj->type = RTOS_OBJ_MESSAGE_QUEUE;
+        obj->type_prefix = "stream";
+        snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+        genericsReport(V_INFO, "FreeRTOS StreamBuffer: CB=0x%08X, Type=%s, Name=%s" EOL,
+                      cb_addr, obj->type_prefix, obj->name);
+        return 0;
+    }
+
     /* Queue_t.pcHead (offset 0): for queues/semaphores it points to the
      * storage area (non-null, word-aligned).  For mutexes, FreeRTOS sets
      * pcHead = NULL intentionally (prvInitialiseMutex).  So NULL is valid. */

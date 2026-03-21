@@ -398,6 +398,20 @@ static struct rtosObject *find_or_create_object(struct rtosState *rtos, uint32_t
 }
 
 
+/* Fallback type mapping for objects that bypass read_object_info
+ * (e.g. FreeRTOS EventGroup_t, StreamBuffer_t, or Zephyr firmware hints) */
+static const struct
+{
+    enum rtosObjectType type;
+    const char *prefix;
+} generic_fallback[] =
+{
+    { RTOS_OBJ_MUTEX,         "mutex"    },  /* hint=0 */
+    { RTOS_OBJ_SEMAPHORE,     "sem"      },  /* hint=1 */
+    { RTOS_OBJ_MESSAGE_QUEUE, "msgqueue" },  /* hint=2 */
+    { RTOS_OBJ_EVENT_FLAGS,   "evtflags" },  /* hint=3 */
+};
+
 void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
                            uint32_t value, uint64_t timestamp)
 {
@@ -414,22 +428,73 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     if (value == 0xFFFFFFFF)
         return;
 
-    /* Bits [1:0] encode the object type hint from firmware.
-     * All Cortex-M heap addresses are word-aligned so bits [1:0] are always 0
-     * for real pointers.  Strip the hint and pass the real address.
+    /* Bits [2:0] encode release flag + type hint from firmware.
+     * All Cortex-M SRAM objects are 8-byte aligned (or at least 4-byte),
+     * so bits [2:0] are always 0 in real pointers.
      *
-     * FreeRTOS:  bit0=1 → EventGroup_t (bit1 always 0)
-     * Zephyr:    bits[1:0] = 00:mutex, 01:sem, 10:msgq, 11:event */
+     * [2]    = 0: acquire (blocking), 1: release (unlock/give/post)
+     * [1:0]  = type hint (RTOS-specific):
+     *   FreeRTOS:  00=Queue_t, 01=EventGroup_t, 10=StreamBuffer_t
+     *   Zephyr:    00=mutex, 01=sem, 10=msgq, 11=event
+     *   RTX5:      00 (type from control block id byte) */
+    bool is_release = (value & 4u) != 0;
     uint8_t type_hint = (uint8_t)(value & 3u);
-    uint32_t real_addr = value & ~3u;
+    uint32_t real_addr = value & ~7u;
     bool is_non_queue = (type_hint != 0);
 
     if (!real_addr)
         return;
 
+    /* --- Release path: look up existing object, emit C|0 --- */
+    if (is_release)
+    {
+        struct rtosObject *obj;
+        HASH_FIND_INT(rtos->objects, &real_addr, obj);
+
+        if (!obj)
+            return;  /* spurious release — object never seen blocking */
+
+        obj->has_release_hooks = true;
+
+        if (obj->blocking_active)
+        {
+            obj->blocking_active = false;
+
+            /* Emit counter falling edge at release timestamp */
+            if (rtos->output_config)
+            {
+                char tag[128];
+                snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
+
+                struct rtosThread *curr = NULL;
+                HASH_FIND_INT(rtos->threads, &rtos->current_thread, curr);
+                char curr_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+
+                if (curr && curr->name[0])
+                {
+                    if (curr->entry_func_name[0])
+                        snprintf(curr_comm, sizeof(curr_comm), "%s|%s", curr->name, curr->entry_func_name);
+                    else
+                        snprintf(curr_comm, sizeof(curr_comm), "%s", curr->name);
+                }
+                else
+                {
+                    curr_comm[0] = '\0';
+                }
+
+                output_object_block((OutputConfig *)rtos->output_config,
+                                   (uint32_t)rtos->current_thread, curr_comm, tag, false, timestamp);
+            }
+        }
+
+        return;
+    }
+
+    /* --- Acquire path: same as before, plus set blocking_active --- */
     rtos->pending_type_hint = type_hint;
 
     struct rtosObject *obj = find_or_create_object(rtos, real_addr);
+
     if (!obj)
     {
         /* read_object_info may have rejected this address (e.g. EventGroup_t
@@ -437,11 +502,23 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
         if (is_non_queue)
         {
             obj = calloc(1, sizeof(struct rtosObject));
+
             if (!obj)
                 return;
+
             obj->cb_addr = real_addr;
-            obj->type = RTOS_OBJ_EVENT_FLAGS;
-            obj->type_prefix = "evtflags";
+
+            if (type_hint < 4)
+            {
+                obj->type = generic_fallback[type_hint].type;
+                obj->type_prefix = generic_fallback[type_hint].prefix;
+            }
+            else
+            {
+                obj->type = RTOS_OBJ_UNKNOWN;
+                obj->type_prefix = "obj";
+            }
+
             snprintf(obj->name, sizeof(obj->name), "0x%08X", real_addr);
             HASH_ADD_INT(rtos->objects, cb_addr, obj);
         }
@@ -454,11 +531,15 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     /* Force type for non-Queue_t objects that were created with UNKNOWN type */
     if (is_non_queue && obj->type == RTOS_OBJ_UNKNOWN)
     {
-        obj->type = RTOS_OBJ_EVENT_FLAGS;
-        obj->type_prefix = "evtflags";
+        if (type_hint < 4)
+        {
+            obj->type = generic_fallback[type_hint].type;
+            obj->type_prefix = generic_fallback[type_hint].prefix;
+        }
     }
 
     obj->event_count++;
+    obj->blocking_active = true;
     rtos->pending_prev_state = 'D';
     rtos->pending_object_addr = real_addr;
 
@@ -471,6 +552,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
         struct rtosThread *curr = NULL;
         HASH_FIND_INT(rtos->threads, &rtos->current_thread, curr);
         char curr_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+
         if (curr && curr->name[0])
         {
             if (curr->entry_func_name[0])
@@ -482,6 +564,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
         {
             curr_comm[0] = '\0';
         }
+
         output_object_block((OutputConfig *)rtos->output_config,
                            (uint32_t)rtos->current_thread, curr_comm, tag, true, timestamp);
     }
@@ -503,13 +586,16 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
 
     char prev_state = rtos->pending_prev_state ? rtos->pending_prev_state : 'R';
 
-    /* Emit falling edge + slice end for the object that caused the block */
+    /* Emit falling edge + slice end for the object that caused the block.
+     * If the object has release hooks (auto-detected), keep the counter high
+     * until the explicit release event — this shows contention time in Perfetto.
+     * Otherwise (backward compat), emit C|0 at context switch as before. */
     if (rtos->pending_object_addr && rtos->output_config)
     {
         struct rtosObject *obj;
         HASH_FIND_INT(rtos->objects, &rtos->pending_object_addr, obj);
 
-        if (obj)
+        if (obj && !obj->has_release_hooks)
         {
             char tag[128];
             snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
@@ -517,6 +603,7 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
             /* B/E slice end + counter falling edge on prev thread */
             uint32_t prev_pid = prev ? (uint32_t)prev->tcb_addr : (uint32_t)rtos->current_thread;
             char prev_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+
             if (prev && prev->name[0])
             {
                 if (prev->entry_func_name[0])
@@ -528,9 +615,12 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
             {
                 prev_comm[0] = '\0';
             }
+
             output_object_block((OutputConfig *)rtos->output_config,
                                prev_pid, prev_comm, tag, false, timestamp);
+            obj->blocking_active = false;
         }
+        /* If has_release_hooks: counter stays high until release event */
     }
 
     if (rtos->output_config)

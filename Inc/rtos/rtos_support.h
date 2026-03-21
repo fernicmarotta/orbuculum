@@ -73,6 +73,8 @@ struct rtosObject {
     enum rtosObjectType type;
     const char *type_prefix;
     uint32_t event_count;
+    bool blocking_active;       /* true from C|1 (blocking) until C|0 (release or ctx switch) */
+    bool has_release_hooks;     /* auto-detect: set permanently on first release event */
     UT_hash_handle hh;
 };
 
@@ -171,6 +173,7 @@ struct rtosState {
     /* Output configuration for real-time events */
     void *output_config;     /* Output handler for thread switches (OutputConfig*) */
 };
+
 
 /* RTOS detection result */
 struct rtosDetection {
