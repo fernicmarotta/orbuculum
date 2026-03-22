@@ -430,7 +430,7 @@ static void _configureObjectWatch(struct SymbolSet *symbols)
     char line[256];
     uint32_t addr = 0;
 
-    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep '%s$'",
+    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t '%s' 2>/dev/null | grep '%s$'",
              symbols->elfFile, options.objWatchSymbol);
     fp = popen(cmd, "r");
     if (fp && fgets(line, sizeof(line), fp))

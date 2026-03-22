@@ -240,7 +240,7 @@ static uint32_t find_symbol_address(const char *elfFile, const char *symbol_name
     char line[256];
     uint32_t address = 0;
 
-    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep '%s$'",
+    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t '%s' 2>/dev/null | grep '%s$'",
              elfFile, symbol_name);
 
     fp = popen(cmd, "r");

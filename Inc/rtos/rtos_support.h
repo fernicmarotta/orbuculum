@@ -73,7 +73,7 @@ struct rtosObject {
     enum rtosObjectType type;
     const char *type_prefix;
     uint32_t event_count;
-    bool blocking_active;       /* true from C|1 (blocking) until C|0 (release or ctx switch) */
+    uint32_t blocking_count;    /* >0 from C|1 (blocking) until C|0 (release or ctx switch) */
     bool has_release_hooks;     /* auto-detect: set permanently on first release event */
     UT_hash_handle hh;
 };
@@ -177,10 +177,13 @@ struct rtosState {
 /* Convert raw ITM timestamp ticks to microseconds using CPU frequency */
 static inline uint64_t ticks_to_us(struct rtosState *rtos, uint64_t ticks)
 {
+    if (!rtos->cpu_freq)
+        return ticks;
+
     if (rtos->cpu_freq >= 1000000)
         return ticks / (rtos->cpu_freq / 1000000);
 
-    return ticks;
+    return (ticks * 1000000) / rtos->cpu_freq;
 }
 
 /* RTOS detection result */

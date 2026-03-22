@@ -323,7 +323,7 @@ static uint32_t find_symbol_address(const char *elfFile, const char *symbol_name
     char line[256];
     uint32_t address = 0;
 
-    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep '%s$'",
+    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t '%s' 2>/dev/null | grep '%s$'",
              elfFile, symbol_name);
 
     fp = popen(cmd, "r");
@@ -356,7 +356,7 @@ static uint32_t find_symbol_size(const char *elfFile, const char *symbol_name)
      * e.g.: "24019628 g     O .bss\t00000040 xQueueRegistry"
      * The size field is between the tab after section and the symbol name. */
     snprintf(cmd, sizeof(cmd),
-             "arm-none-eabi-objdump -t %s 2>/dev/null | grep '%s$' | awk '{print $(NF-1)}'",
+             "arm-none-eabi-objdump -t '%s' 2>/dev/null | grep '%s$' | awk '{print $(NF-1)}'",
              elfFile, symbol_name);
 
     fp = popen(cmd, "r");
@@ -444,7 +444,7 @@ static void detect_tcb_offsets_from_dwarf(struct freertos_private *priv, struct 
                 {
                     char cmd[512];
                     snprintf(cmd, sizeof(cmd),
-                             "gdb-multiarch -batch -ex \"print sizeof(QueueRegistryItem_t)\" %s 2>/dev/null",
+                             "gdb-multiarch -batch -ex \"print sizeof(QueueRegistryItem_t)\" '%s' 2>/dev/null",
                              symbols->elfFile);
                     FILE *fp = popen(cmd, "r");
                     if (fp)

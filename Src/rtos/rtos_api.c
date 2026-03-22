@@ -456,12 +456,12 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
 
         obj->has_release_hooks = true;
 
-        if (obj->blocking_active)
+        if (obj->blocking_count > 0)
         {
-            obj->blocking_active = false;
+            obj->blocking_count--;
 
-            /* Emit counter falling edge at release timestamp */
-            if (rtos->output_config)
+            /* Emit counter falling edge only when last waiter releases */
+            if (obj->blocking_count == 0 && rtos->output_config)
             {
                 char tag[128];
                 snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
@@ -472,7 +472,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
 
                 if (curr && curr->name[0])
                 {
-                    if (curr->entry_func_name[0])
+                    if (curr->entry_func_name && curr->entry_func_name[0])
                         snprintf(curr_comm, sizeof(curr_comm), "%s|%s", curr->name, curr->entry_func_name);
                     else
                         snprintf(curr_comm, sizeof(curr_comm), "%s", curr->name);
@@ -490,7 +490,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
         return;
     }
 
-    /* --- Acquire path: same as before, plus set blocking_active --- */
+    /* --- Acquire path: same as before, plus increment blocking_count --- */
     rtos->pending_type_hint = type_hint;
 
     struct rtosObject *obj = find_or_create_object(rtos, real_addr);
@@ -539,7 +539,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     }
 
     obj->event_count++;
-    obj->blocking_active = true;
+    obj->blocking_count++;
     rtos->pending_prev_state = 'D';
     rtos->pending_object_addr = real_addr;
 
@@ -555,7 +555,7 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
 
         if (curr && curr->name[0])
         {
-            if (curr->entry_func_name[0])
+            if (curr->entry_func_name && curr->entry_func_name[0])
                 snprintf(curr_comm, sizeof(curr_comm), "%s|%s", curr->name, curr->entry_func_name);
             else
                 snprintf(curr_comm, sizeof(curr_comm), "%s", curr->name);
@@ -606,7 +606,7 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
 
             if (prev && prev->name[0])
             {
-                if (prev->entry_func_name[0])
+                if (prev->entry_func_name && prev->entry_func_name[0])
                     snprintf(prev_comm, sizeof(prev_comm), "%s|%s", prev->name, prev->entry_func_name);
                 else
                     snprintf(prev_comm, sizeof(prev_comm), "%s", prev->name);
@@ -618,7 +618,7 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
 
             output_object_block((OutputConfig *)rtos->output_config,
                                prev_pid, prev_comm, tag, false, ticks_to_us(rtos, timestamp));
-            obj->blocking_active = false;
+            obj->blocking_count = 0;
         }
         /* If has_release_hooks: counter stays high until release event */
     }

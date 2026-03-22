@@ -195,19 +195,19 @@ uint32_t telnet_read_memory_word(uint32_t address)
     }
 
     if (telnet_connect(_telnetPort) < 0)
-        return 0;
-    
+        return 0xFFFFFFFF;
+
     char cmd[64];
     snprintf(cmd, sizeof(cmd), "mdw 0x%08x 1\n", address);
-    
+
     if (send(_telnetSocket, cmd, strlen(cmd), 0) < 0) {
         fprintf(stderr, "Failed to send telnet command\n");
         telnet_disconnect();
-        return 0;
+        return 0xFFFFFFFF;
     }
-    
+
     char line[256];
-    uint32_t value = 0;
+    uint32_t value = 0xFFFFFFFF;
     int found = 0;
     int lines_read = 0;
     

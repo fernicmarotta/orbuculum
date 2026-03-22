@@ -350,7 +350,7 @@ static int rtx5_init(struct rtosState *rtos, struct SymbolSet *symbols)
         FILE *fp;
         char line[256];
 
-        snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep 'osRtxInfo$'", symbols->elfFile);
+        snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t '%s' 2>/dev/null | grep 'osRtxInfo$'", symbols->elfFile);
         fp = popen(cmd, "r");
         if (fp && fgets(line, sizeof(line), fp))
         {
