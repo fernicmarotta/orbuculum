@@ -495,7 +495,8 @@ static void _itmPumpProcess( char c )
         /* MSG_PC_SAMPLE */       NULL,
         /* MSG_DWT_EVENT */       ( handlers )_handleDWTEvent,
         /* MSG_EXCEPTION */       ( handlers )_handleException,
-        /* MSG_TS */              ( handlers )_handleTS
+        /* MSG_TS */              ( handlers )_handleTS,
+        /* MSG_DATA_PC_VALUE */   NULL
     };
 
     /* For any mode except the ones where we collect timestamps from the target we need to send */

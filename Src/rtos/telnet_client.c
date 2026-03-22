@@ -195,19 +195,19 @@ uint32_t telnet_read_memory_word(uint32_t address)
     }
 
     if (telnet_connect(_telnetPort) < 0)
-        return 0;
-    
+        return 0xFFFFFFFF;
+
     char cmd[64];
     snprintf(cmd, sizeof(cmd), "mdw 0x%08x 1\n", address);
-    
+
     if (send(_telnetSocket, cmd, strlen(cmd), 0) < 0) {
         fprintf(stderr, "Failed to send telnet command\n");
         telnet_disconnect();
-        return 0;
+        return 0xFFFFFFFF;
     }
-    
+
     char line[256];
-    uint32_t value = 0;
+    uint32_t value = 0xFFFFFFFF;
     int found = 0;
     int lines_read = 0;
     
@@ -350,7 +350,24 @@ void telnet_configure_dwt(uint32_t watch_address) {
     _readLine(_telnetSocket, response, sizeof(response), 500);
     _drainSocket(_telnetSocket);
 
-    genericsReport(V_INFO, "Configured DWT comparator 1 to watch 0x%08X\n", watch_address);
+    genericsReport(V_INFO, "Configured DWT comparator 0 to watch 0x%08X\n", watch_address);
+}
+
+void telnet_configure_dwt2(uint32_t watch_address) {
+    if (telnet_connect(_telnetPort) < 0) {
+        genericsReport(V_ERROR, "Cannot connect to OpenOCD telnet at %s:%d for DWT2\n", _telnetHost, _telnetPort);
+        return;
+    }
+
+    char cmd[256];
+    char response[1024];
+
+    snprintf(cmd, sizeof(cmd), "rtos_dwt2_config 0x%08X\n", watch_address);
+    send(_telnetSocket, cmd, strlen(cmd), 0);
+    _readLine(_telnetSocket, response, sizeof(response), 500);
+    _drainSocket(_telnetSocket);
+
+    genericsReport(V_INFO, "Configured DWT comparator 1 to watch 0x%08X (data write with value)\n", watch_address);
 }
 
 void telnet_configure_exception_trace(bool enable) {

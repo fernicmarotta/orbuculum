@@ -34,17 +34,17 @@ void options_print_help(const char *progName) {
     fprintf(stdout, "Usage: %s [options]\n", progName);
     fprintf(stdout, "\nRequired:\n");
     fprintf(stdout, "  -e, --elf-file:      <ElfFile> ELF file for symbols\n");
+    fprintf(stdout, "  -F, --cpu-freq:      <Hz> CPU frequency for timestamp calculations\n");
     fprintf(stdout, "\nOptional:\n");
-    fprintf(stdout, "  -c, --itm-channel:   <ch>:<tag> | <start-end>:<prefix> | all:<prefix>\n");
+    fprintf(stdout, "  -c, --itm-channel:   <ch>:<tag> | <start-end>:<prefix> | all:<prefix> (requires -T and -K)\n");
     fprintf(stdout, "                       e.g. -c 2:sensor  -c 1-31:ch  -c all:ch\n");
     fprintf(stdout, "  -D, --no-demangle:   Switch off C++ symbol demangling\n");
     fprintf(stdout, "  -E, --exceptions:    Include exceptions in output\n");
-    fprintf(stdout, "  -F, --cpu-freq:      <Hz> CPU frequency for time calculations (omit to show NA)\n");
     fprintf(stdout, "  -f, --input-file:    <filename> Take input from file\n");
     fprintf(stdout, "  -h, --help:          This help\n");
     fprintf(stdout, "  -I, --interval:      <ms> Display interval (default %dms)\n", TOP_UPDATE_INTERVAL);
     fprintf(stdout, "  -j, --json-output:   <file> or 'udp:port' for JSON output (REQUIRED argument)\n");
-    fprintf(stdout, "  -K, --ftrace:        <file> ftrace trace output (use - for stdout or /tmp/trace.pipe for live)\n");
+    fprintf(stdout, "  -K, --ftrace:        <file> ftrace trace output (requires -T) (use - for stdout)\n");
     fprintf(stdout, "  -M, --no-colour:     Suppress colour in output\n");
     fprintf(stdout, "  -n, --itm-sync:      Enforce ITM sync requirement\n");
     fprintf(stdout, "  -O, --objdump-opts:  <options> Options to pass directly to objdump\n");
@@ -53,6 +53,7 @@ void options_print_help(const char *progName) {
     fprintf(stdout, "  -s, --server:        <Server>:<Port> (default localhost:%d)\n", OFCLIENT_SERVER_PORT);
     fprintf(stdout, "  -T, --rtos:          <type> RTOS type (rtx5, freertos, zephyr)\n");
     fprintf(stdout, "  -S, --rtos-sort:     Sort: cpu|maxcpu|tcb|name|func|priority|switches\n");
+    fprintf(stdout, "  -w, --watch-object:  <symbol> Watch variable for RTOS object DWT tracing (requires -T and -K)\n");
     fprintf(stdout, "  -W, --telnet-port:   <port> Telnet port for OpenOCD (default 4444)\n");
     fprintf(stdout, "  -t, --tag:           <stream> OFLOW tag (default 1)\n");
     fprintf(stdout, "  -v, --verbose:       <level> Verbose 0(errors)..3(debug)\n");
@@ -89,6 +90,7 @@ static struct option longOptions[] = {
     {"server", required_argument, NULL, 's'},
     {"rtos", required_argument, NULL, 'T'},
     {"rtos-sort", required_argument, NULL, 'S'},
+    {"watch-object", required_argument, NULL, 'w'},
     {"telnet-port", required_argument, NULL, 'W'},
     {"tag", required_argument, NULL, 't'},
     {"verbose", required_argument, NULL, 'v'},
@@ -102,7 +104,7 @@ int options_parse(int argc, char *argv[], ProgramOptions *opts) {
     
     memcpy(opts, &defaultOptions, sizeof(ProgramOptions));
     
-    while ((c = getopt_long(argc, argv, "c:De:EF:f:I:j:K:MnO:p:P:s:S:T:W:t:v:hV",
+    while ((c = getopt_long(argc, argv, "c:De:EF:f:I:j:K:MnO:p:P:s:S:T:w:W:t:v:hV",
                             longOptions, NULL)) != -1) {
         switch (c) {
             case 'c':
@@ -237,6 +239,9 @@ int options_parse(int argc, char *argv[], ProgramOptions *opts) {
             case 'T':
                 opts->rtos = optarg;
                 break;
+            case 'w':
+                opts->objWatchSymbol = optarg;
+                break;
             case 'W':
                 opts->telnetPort = atoi(optarg);
                 break;
@@ -262,6 +267,52 @@ int options_parse(int argc, char *argv[], ProgramOptions *opts) {
         fprintf(stderr, "Error: ELF file required (-e)\n");
         return -1;
     }
-    
+
+    if (!opts->cpuFreq) {
+        fprintf(stderr, "Error: CPU frequency required (-F)\n");
+        return -1;
+    }
+
+    /* -K, -w and -c require -T (RTOS type) */
+    if (!opts->rtos)
+    {
+        if (opts->ftrace)
+        {
+            fprintf(stderr, "Error: -K (ftrace) requires -T (RTOS type)\n");
+            return -1;
+        }
+        if (opts->objWatchSymbol)
+        {
+            fprintf(stderr, "Error: -w (object tracking) requires -T (RTOS type)\n");
+            return -1;
+        }
+        for (int i = 0; i < ITM_NUM_CHANNELS; i++)
+        {
+            if (opts->itm_channel_tags[i])
+            {
+                fprintf(stderr, "Error: -c (ITM channels) requires -T (RTOS type)\n");
+                return -1;
+            }
+        }
+    }
+
+    /* -w and -c require -K (ftrace output) */
+    if (!opts->ftrace)
+    {
+        if (opts->objWatchSymbol)
+        {
+            fprintf(stderr, "Error: -w (object tracking) requires -K (ftrace output)\n");
+            return -1;
+        }
+        for (int i = 0; i < ITM_NUM_CHANNELS; i++)
+        {
+            if (opts->itm_channel_tags[i])
+            {
+                fprintf(stderr, "Error: -c (ITM channels) requires -K (ftrace output)\n");
+                return -1;
+            }
+        }
+    }
+
     return 0;
 }

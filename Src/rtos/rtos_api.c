@@ -190,17 +190,23 @@ struct rtosState *rtosDetectAndInit(struct SymbolSet *symbols, const char *reque
 void rtosFree(struct rtosState *rtos)
 {
     if (!rtos) return;
-    
+
     struct rtosThread *thread, *tmp;
     HASH_ITER(hh, rtos->threads, thread, tmp) {
         HASH_DEL(rtos->threads, thread);
         free(thread);
     }
-    
+
+    struct rtosObject *obj, *obj_tmp;
+    HASH_ITER(hh, rtos->objects, obj, obj_tmp) {
+        HASH_DEL(rtos->objects, obj);
+        free(obj);
+    }
+
     if (rtos->ops && rtos->ops->cleanup) {
         rtos->ops->cleanup(rtos);
     }
-    
+
     free(rtos);
 }
 
@@ -358,6 +364,230 @@ static void account_prev_thread_time_us(struct rtosState *rtos, uint64_t current
 }
 
 
+static struct rtosObject *find_or_create_object(struct rtosState *rtos, uint32_t cb_addr)
+{
+    struct rtosObject *obj;
+    HASH_FIND_INT(rtos->objects, &cb_addr, obj);
+
+    if (obj)
+        return obj;
+
+    obj = calloc(1, sizeof(struct rtosObject));
+    if (!obj)
+        return NULL;
+
+    obj->cb_addr = cb_addr;
+
+    if (rtos->ops && rtos->ops->read_object_info)
+    {
+        if (rtos->ops->read_object_info(rtos, obj, cb_addr) < 0)
+        {
+            free(obj);
+            return NULL;
+        }
+    }
+    else
+    {
+        obj->type = RTOS_OBJ_UNKNOWN;
+        obj->type_prefix = "obj";
+        snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+    }
+
+    HASH_ADD_INT(rtos->objects, cb_addr, obj);
+    return obj;
+}
+
+
+/* Fallback type mapping for objects that bypass read_object_info
+ * (e.g. FreeRTOS EventGroup_t, StreamBuffer_t, or Zephyr firmware hints) */
+static const struct
+{
+    enum rtosObjectType type;
+    const char *prefix;
+} generic_fallback[] =
+{
+    { RTOS_OBJ_MUTEX,         "mutex"    },  /* hint=0 */
+    { RTOS_OBJ_SEMAPHORE,     "sem"      },  /* hint=1 */
+    { RTOS_OBJ_MESSAGE_QUEUE, "msgqueue" },  /* hint=2 */
+    { RTOS_OBJ_EVENT_FLAGS,   "evtflags" },  /* hint=3 */
+};
+
+void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
+                           uint32_t value, uint64_t timestamp)
+{
+    if (!rtos || !rtos->enabled)
+        return;
+
+    if (value == 0)
+    {
+        rtos->pending_prev_state = 'S';
+        rtos->pending_object_addr = 0;
+        return;
+    }
+
+    if (value == 0xFFFFFFFF)
+        return;
+
+    /* Bit [31] = release flag, bits [1:0] = type hint from firmware.
+     * Cortex-M SRAM objects are 4-byte aligned, so bits [1:0] are always 0
+     * in real pointers.  Bit [31] is safe because all Cortex-M internal
+     * memory (SRAM, DTCM, Flash) has bit [31] = 0.
+     *
+     * [31]    = 0: acquire (blocking), 1: release (unlock/give/post)
+     * [30:2]  = object address bits
+     * [1:0]   = type hint (RTOS-specific):
+     *   FreeRTOS:  00=Queue_t, 01=EventGroup_t, 10=StreamBuffer_t
+     *   Zephyr:    00=mutex, 01=sem, 10=msgq, 11=event
+     *   RTX5:      00 (type from control block id byte)
+     *
+     * Note: objects in external SDRAM (0x80000000+) are NOT supported
+     * because bit [31] would collide with the release flag. */
+    bool is_release = (value >> 31) != 0;
+    uint8_t type_hint = (uint8_t)(value & 3u);
+    uint32_t real_addr = value & 0x7FFFFFFCu;
+    bool is_non_queue = (type_hint != 0);
+
+    if (!real_addr)
+        return;
+
+    /* --- Release path: look up existing object, emit C|0 --- */
+    if (is_release)
+    {
+        struct rtosObject *obj;
+        HASH_FIND_INT(rtos->objects, &real_addr, obj);
+
+        if (!obj)
+            return;  /* spurious release — object never seen blocking */
+
+        obj->has_release_hooks = true;
+
+        if (obj->blocking_count > 0)
+        {
+            obj->blocking_count--;
+
+            /* Emit counter falling edge only when last waiter releases */
+            if (obj->blocking_count == 0 && rtos->output_config)
+            {
+                char tag[128];
+                snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
+
+                struct rtosThread *curr = NULL;
+                HASH_FIND_INT(rtos->threads, &rtos->current_thread, curr);
+                char curr_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+
+                if (curr && curr->name[0])
+                {
+                    if (curr->entry_func_name && curr->entry_func_name[0])
+                        snprintf(curr_comm, sizeof(curr_comm), "%s|%s", curr->name, curr->entry_func_name);
+                    else
+                        snprintf(curr_comm, sizeof(curr_comm), "%s", curr->name);
+                }
+                else
+                {
+                    curr_comm[0] = '\0';
+                }
+
+                output_object_block((OutputConfig *)rtos->output_config,
+                                   (uint32_t)rtos->current_thread, curr_comm, tag, false, ticks_to_us(rtos, timestamp));
+            }
+        }
+
+        return;
+    }
+
+    /* --- Acquire path: same as before, plus increment blocking_count --- */
+    rtos->pending_type_hint = type_hint;
+
+    struct rtosObject *obj = find_or_create_object(rtos, real_addr);
+
+    if (!obj)
+    {
+        /* read_object_info may have rejected this address (e.g. EventGroup_t
+         * fails pcHead validation).  Create a minimal object directly. */
+        if (is_non_queue)
+        {
+            obj = calloc(1, sizeof(struct rtosObject));
+
+            if (!obj)
+                return;
+
+            obj->cb_addr = real_addr;
+
+            if (type_hint < 4)
+            {
+                obj->type = generic_fallback[type_hint].type;
+                obj->type_prefix = generic_fallback[type_hint].prefix;
+            }
+            else
+            {
+                obj->type = RTOS_OBJ_UNKNOWN;
+                obj->type_prefix = "obj";
+            }
+
+            snprintf(obj->name, sizeof(obj->name), "0x%08X", real_addr);
+            HASH_ADD_INT(rtos->objects, cb_addr, obj);
+        }
+        else
+        {
+            return;
+        }
+    }
+
+    /* Force type for non-Queue_t objects that were created with UNKNOWN type */
+    if (is_non_queue && obj->type == RTOS_OBJ_UNKNOWN)
+    {
+        if (type_hint < 4)
+        {
+            obj->type = generic_fallback[type_hint].type;
+            obj->type_prefix = generic_fallback[type_hint].prefix;
+        }
+    }
+
+    obj->event_count++;
+    obj->blocking_count++;
+    rtos->pending_prev_state = 'D';
+    rtos->pending_object_addr = real_addr;
+
+    /* Emit B/E slice begin + counter rising edge on current thread */
+    if (rtos->output_config)
+    {
+        char tag[128];
+        snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
+
+        struct rtosThread *curr = NULL;
+        HASH_FIND_INT(rtos->threads, &rtos->current_thread, curr);
+        char curr_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+
+        if (curr && curr->name[0])
+        {
+            if (curr->entry_func_name && curr->entry_func_name[0])
+                snprintf(curr_comm, sizeof(curr_comm), "%s|%s", curr->name, curr->entry_func_name);
+            else
+                snprintf(curr_comm, sizeof(curr_comm), "%s", curr->name);
+        }
+        else
+        {
+            curr_comm[0] = '\0';
+        }
+
+        output_object_block((OutputConfig *)rtos->output_config,
+                           (uint32_t)rtos->current_thread, curr_comm, tag, true, ticks_to_us(rtos, timestamp));
+    }
+}
+
+
+void rtosHandleOverflow(struct rtosState *rtos, uint64_t timestamp)
+{
+    if (!rtos || !rtos->output_config)
+        return;
+
+    rtos->pending_object_addr = 0;
+    rtos->pending_prev_state = 0;
+
+    output_instant_event((OutputConfig *)rtos->output_config, "ITM_OVERFLOW", timestamp);
+}
+
+
 static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thread,
                                    uint64_t timestamp)
 {
@@ -371,9 +601,50 @@ static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thr
     if (rtos->current_thread)
         HASH_FIND_INT(rtos->threads, &rtos->current_thread, prev);
 
-    if (rtos->output_config)
-        output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, timestamp);
+    char prev_state = rtos->pending_prev_state ? rtos->pending_prev_state : 'R';
 
+    /* Emit falling edge + slice end for the object that caused the block.
+     * If the object has release hooks (auto-detected), keep the counter high
+     * until the explicit release event — this shows contention time in Perfetto.
+     * Otherwise (backward compat), emit C|0 at context switch as before. */
+    if (rtos->pending_object_addr && rtos->output_config)
+    {
+        struct rtosObject *obj;
+        HASH_FIND_INT(rtos->objects, &rtos->pending_object_addr, obj);
+
+        if (obj && !obj->has_release_hooks)
+        {
+            char tag[128];
+            snprintf(tag, sizeof(tag), "%s:%s", obj->type_prefix, obj->name);
+
+            /* B/E slice end + counter falling edge on prev thread */
+            uint32_t prev_pid = prev ? (uint32_t)prev->tcb_addr : (uint32_t)rtos->current_thread;
+            char prev_comm[RTOS_THREAD_NAME_MAX_LEN * 2];
+
+            if (prev && prev->name[0])
+            {
+                if (prev->entry_func_name && prev->entry_func_name[0])
+                    snprintf(prev_comm, sizeof(prev_comm), "%s|%s", prev->name, prev->entry_func_name);
+                else
+                    snprintf(prev_comm, sizeof(prev_comm), "%s", prev->name);
+            }
+            else
+            {
+                prev_comm[0] = '\0';
+            }
+
+            output_object_block((OutputConfig *)rtos->output_config,
+                               prev_pid, prev_comm, tag, false, ticks_to_us(rtos, timestamp));
+            obj->blocking_count = 0;
+        }
+        /* If has_release_hooks: counter stays high until release event */
+    }
+
+    if (rtos->output_config)
+        output_thread_switch((OutputConfig *)rtos->output_config, prev, thread, ticks_to_us(rtos, timestamp), prev_state);
+
+    rtos->pending_prev_state = 0;
+    rtos->pending_object_addr = 0;
     rtos->current_thread = thread->tcb_addr;
 }
 
@@ -382,7 +653,7 @@ void rtosHandleDWTMatchWithTimestamp(struct rtosState *rtos, struct SymbolSet *s
                                      uint32_t comp_num, uint32_t address, uint32_t value,
                                      uint64_t itm_timestamp, int options_telnetPort)
 {
-    if (!rtos || !rtos->enabled)
+    if (!rtos || !rtos->enabled || value == 0 || value == 0xFFFFFFFF)
         return;
 
     uint32_t current_cyccnt = (uint32_t)(itm_timestamp & 0xFFFFFFFF);
@@ -403,7 +674,7 @@ void rtosHandleDWTMatch(struct rtosState *rtos, struct SymbolSet *symbols,
                         uint32_t comp_num, uint32_t address, uint32_t value,
                         int options_telnetPort)
 {
-    if (!rtos || !rtos->enabled)
+    if (!rtos || !rtos->enabled || value == 0 || value == 0xFFFFFFFF)
         return;
 
     uint64_t current_time_us = genericsTimestampuS();

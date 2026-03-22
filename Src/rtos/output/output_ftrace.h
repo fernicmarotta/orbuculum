@@ -11,8 +11,12 @@ void output_ftrace_exception_entry(OutputConfig *config, ExceptionOutput *except
 void output_ftrace_stats(OutputConfig *config, StatsOutput *stats);
 void output_ftrace_rtos_info(OutputConfig *config, void *rtos_data);
 void output_ftrace_end_frame(OutputConfig *config);
-void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us);
+void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, struct rtosThread *next, uint64_t timestamp_us, char prev_state);
 void output_ftrace_itm_event(OutputConfig *config, ItmEventOutput *event, uint64_t timestamp);
+void output_ftrace_object_block(OutputConfig *config, uint32_t thread_pid,
+                                const char *thread_name, const char *object_tag,
+                                bool begin, uint64_t timestamp);
+void output_ftrace_instant_event(OutputConfig *config, const char *name, uint64_t timestamp);
 void output_ftrace_reset(void);
 
 #endif

@@ -54,6 +54,30 @@ struct rtosThread {
     UT_hash_handle hh;              /* Hash handle */
 };
 
+/* RTOS object types (kernel synchronization primitives) */
+enum rtosObjectType {
+    RTOS_OBJ_UNKNOWN = 0,
+    RTOS_OBJ_MUTEX,
+    RTOS_OBJ_SEMAPHORE,
+    RTOS_OBJ_EVENT_FLAGS,
+    RTOS_OBJ_MESSAGE_QUEUE,
+    RTOS_OBJ_MEMORY_POOL,
+    RTOS_OBJ_DELAY
+};
+
+#define RTOS_OBJECT_NAME_MAX_LEN 64
+
+struct rtosObject {
+    uint32_t cb_addr;
+    char name[RTOS_OBJECT_NAME_MAX_LEN];
+    enum rtosObjectType type;
+    const char *type_prefix;
+    uint32_t event_count;
+    uint32_t blocking_count;    /* >0 from C|1 (blocking) until C|0 (release or ctx switch) */
+    bool has_release_hooks;     /* auto-detect: set permanently on first release event */
+    UT_hash_handle hh;
+};
+
 /* RTOS types */
 enum rtosType {
     RTOS_NONE = 0,
@@ -108,6 +132,9 @@ struct rtosOps {
 
     /* Get address to watch for context switches (for DWT configuration) */
     uint32_t (*get_watchpoint_addr)(struct rtosState *rtos);
+
+    /* Read RTOS object info from target memory (mutex, semaphore, etc.) */
+    int (*read_object_info)(struct rtosState *rtos, struct rtosObject *obj, uint32_t cb_addr);
 };
 
 /* RTOS State */
@@ -130,6 +157,12 @@ struct rtosState {
     struct rtosThread *threads;             /* Hash table of all threads */
     uint32_t thread_count;                  /* Number of threads detected */
     uint32_t max_cpu_usage;                 /* Maximum CPU usage seen (in 0.01% units) */
+
+    /* Object tracking (mutex, semaphore, etc.) */
+    struct rtosObject *objects;             /* Hash table of RTOS objects */
+    uint32_t pending_object_addr;           /* Object addr from DWT comp1 (0 = delay, >0 = blocked) */
+    char pending_prev_state;                /* prev_state for next context switch ('R', 'S', 'D') */
+    uint8_t pending_type_hint;              /* bits [1:0] from DWT comp1 value — object type from firmware */
     
     /* RTOS-specific private data */
     void *priv;                             /* Private data for RTOS implementation */
@@ -140,6 +173,18 @@ struct rtosState {
     /* Output configuration for real-time events */
     void *output_config;     /* Output handler for thread switches (OutputConfig*) */
 };
+
+/* Convert raw ITM timestamp ticks to microseconds using CPU frequency */
+static inline uint64_t ticks_to_us(struct rtosState *rtos, uint64_t ticks)
+{
+    if (!rtos->cpu_freq)
+        return ticks;
+
+    if (rtos->cpu_freq >= 1000000)
+        return ticks / (rtos->cpu_freq / 1000000);
+
+    return (ticks * 1000000) / rtos->cpu_freq;
+}
 
 /* RTOS detection result */
 struct rtosDetection {
@@ -185,6 +230,13 @@ void rtosResetThreadCounters(struct rtosState *rtos);
 /* Memory reading functions (implemented in orbtop_rtos.c) */
 uint32_t rtosReadMemoryWord(uint32_t address);
 char *rtosReadMemoryString(uint32_t address, char *buffer, size_t maxlen);
+
+/* Object event handling (DWT comp1 trigger) */
+void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
+                           uint32_t value, uint64_t timestamp);
+
+/* ITM overflow recovery: close open object counters and emit instant marker */
+void rtosHandleOverflow(struct rtosState *rtos, uint64_t timestamp);
 
 /* DWT configuration via telnet */
 void rtosConfigureDWT(uint32_t watch_address);

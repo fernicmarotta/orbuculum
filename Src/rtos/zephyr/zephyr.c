@@ -240,7 +240,7 @@ static uint32_t find_symbol_address(const char *elfFile, const char *symbol_name
     char line[256];
     uint32_t address = 0;
 
-    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t %s 2>/dev/null | grep '%s$'",
+    snprintf(cmd, sizeof(cmd), "arm-none-eabi-objdump -t '%s' 2>/dev/null | grep '%s$'",
              elfFile, symbol_name);
 
     fp = popen(cmd, "r");
@@ -629,6 +629,54 @@ static uint32_t zephyr_get_watchpoint_addr(struct rtosState *rtos)
  * Operations table
  * ------------------------------------------------------------------------- */
 
+/* -------------------------------------------------------------------------
+ * Object tracking (minimal — Zephyr has no unified object header)
+ * ------------------------------------------------------------------------- */
+
+static int zephyr_read_object_info(struct rtosState *rtos, struct rtosObject *obj, uint32_t cb_addr)
+{
+    if (!rtos || !obj || !cb_addr)
+        return -1;
+
+    /* Zephyr objects have no common type ID field.  The firmware encodes
+     * the object type in bits [1:0] of the DWT comp1 value, which
+     * rtosHandleObjectEvent() stores in pending_type_hint before calling us.
+     *   00 = mutex, 01 = sem, 10 = msgq, 11 = event */
+    static const struct
+    {
+        enum rtosObjectType type;
+        const char *prefix;
+    } type_map[] =
+    {
+        { RTOS_OBJ_MUTEX,         "mutex"    },  /* hint = 0 */
+        { RTOS_OBJ_SEMAPHORE,     "sem"      },  /* hint = 1 */
+        { RTOS_OBJ_MESSAGE_QUEUE, "msgqueue" },  /* hint = 2 */
+        { RTOS_OBJ_EVENT_FLAGS,   "evtflags" },  /* hint = 3 */
+    };
+
+    uint8_t hint = rtos->pending_type_hint;
+
+    if (hint < 4)
+    {
+        obj->type = type_map[hint].type;
+        obj->type_prefix = type_map[hint].prefix;
+    }
+    else
+    {
+        obj->type = RTOS_OBJ_UNKNOWN;
+        obj->type_prefix = "obj";
+    }
+
+    /* Zephyr objects have no name registry — use hex address */
+    snprintf(obj->name, sizeof(obj->name), "0x%08X", cb_addr);
+
+    genericsReport(V_INFO, "Zephyr Object: CB=0x%08X, type=%s, Name=%s" EOL,
+                  cb_addr, obj->type_prefix, obj->name);
+
+    return 0;
+}
+
+
 static const struct rtosOps zephyr_ops =
 {
     .read_thread_info = zephyr_read_thread_info,
@@ -639,7 +687,8 @@ static const struct rtosOps zephyr_ops =
     .get_state_name = zephyr_get_state_name,
     .is_idle_thread = zephyr_is_idle_thread,
     .verify_target_match = zephyr_verify_target_match,
-    .get_watchpoint_addr = zephyr_get_watchpoint_addr
+    .get_watchpoint_addr = zephyr_get_watchpoint_addr,
+    .read_object_info = zephyr_read_object_info
 };
 
 

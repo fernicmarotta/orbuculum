@@ -27,16 +27,16 @@
 #define ZEPHYR_SYM_KERNEL                   "_kernel"
 
 /* Offsets array exported by subsys/debug/thread_info.c */
-#define ZEPHYR_SYM_OFFSETS                  "_kernel_openocd_offsets"
-#define ZEPHYR_SYM_OFFSETS_ALT              "_kernel_thread_info_offsets"
+#define ZEPHYR_SYM_OFFSETS                  "_kernel_thread_info_offsets"
+#define ZEPHYR_SYM_OFFSETS_ALT              "_kernel_openocd_offsets"
 
 /* sizeof(size_t) on target - needed to interpret offsets array */
-#define ZEPHYR_SYM_SIZE_T_SIZE              "_kernel_openocd_size_t_size"
-#define ZEPHYR_SYM_SIZE_T_SIZE_ALT          "_kernel_thread_info_size_t_size"
+#define ZEPHYR_SYM_SIZE_T_SIZE              "_kernel_thread_info_size_t_size"
+#define ZEPHYR_SYM_SIZE_T_SIZE_ALT          "_kernel_openocd_size_t_size"
 
 /* Number of offsets in the array (optional) */
-#define ZEPHYR_SYM_NUM_OFFSETS              "_kernel_openocd_num_offsets"
-#define ZEPHYR_SYM_NUM_OFFSETS_ALT          "_kernel_thread_info_num_offsets"
+#define ZEPHYR_SYM_NUM_OFFSETS              "_kernel_thread_info_num_offsets"
+#define ZEPHYR_SYM_NUM_OFFSETS_ALT          "_kernel_openocd_num_offsets"
 
 /* --------------------------------------------------------------------------
  * Offsets array indices (from Zephyr subsys/debug/thread_info.c)

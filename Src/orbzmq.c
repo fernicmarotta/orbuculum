@@ -364,7 +364,8 @@ void _itmPumpProcess( char c )
         /* MSG_PC_SAMPLE */       ( handlers )_handlePCSample,
         /* MSG_DWT_EVENT */       ( handlers )_handleDWTEvent,
         /* MSG_EXCEPTION */       ( handlers )_handleException,
-        /* MSG_TS */              ( handlers )_handleTS
+        /* MSG_TS */              ( handlers )_handleTS,
+        /* MSG_DATA_PC_VALUE */   NULL
     };
 
     switch ( ITMPump( &_r.i, c ) )

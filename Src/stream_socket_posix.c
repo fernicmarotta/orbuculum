@@ -46,6 +46,11 @@ static enum ReceiveResult _posixSocketStreamReceive( struct Stream *stream, void
 
     if ( r < 0 )
     {
+        if ( errno == EINTR )
+        {
+            return RECEIVE_RESULT_TIMEOUT;
+        }
+
         return RECEIVE_RESULT_ERROR;
     }
 
