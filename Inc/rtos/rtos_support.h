@@ -235,6 +235,9 @@ char *rtosReadMemoryString(uint32_t address, char *buffer, size_t maxlen);
 void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
                            uint32_t value, uint64_t timestamp);
 
+/* ITM overflow recovery: close open object counters and emit instant marker */
+void rtosHandleOverflow(struct rtosState *rtos, uint64_t timestamp);
+
 /* DWT configuration via telnet */
 void rtosConfigureDWT(uint32_t watch_address);
 

@@ -1099,7 +1099,12 @@ Interval: 1000 ms, CPU Usage: 45.234%,  Max: 82.345%, CPU Freq: 480000000Hz [WAR
 
 3. **Monitor overflow counter**: Watch the `Ovf` counter in output
 
-**IMPORTANT**: When overflow occurs, data is lost. CPU usage percentages become unreliable, and ftrace output will have missing context switches and object events.
+**IMPORTANT**: When overflow occurs, data is lost. CPU usage percentages become
+unreliable, and ftrace output will have missing context switches and object
+events. On overflow, orbtop-rtos emits an instant event `I|0|ITM_OVERFLOW` in
+the ftrace output (vertical marker in Perfetto). Object counters are
+intentionally left untouched — resetting them would create false release
+artifacts when no object events were actually lost.
 
 ### Troubleshooting
 

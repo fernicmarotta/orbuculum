@@ -73,14 +73,14 @@ void output_ftrace_thread_switch(OutputConfig *config, struct rtosThread *prev, 
 
     if (prev)
     {
-        p_base = (prev->name && prev->name[0]) ? prev->name : "unknown";
+        p_base = prev->name[0] ? prev->name : "unknown";
         p_entry = prev->entry_func_name;
         p_tcb = prev->tcb_addr;
         p_prio = prev->priority;
         p_pid = (unsigned)(uint32_t)p_tcb;
     }
 
-    const char *n_base = (next->name && next->name[0]) ? next->name : "unknown";
+    const char *n_base = next->name[0] ? next->name : "unknown";
     const char *n_entry = next->entry_func_name;
     uintptr_t n_tcb = next->tcb_addr;
     int n_prio = next->priority;
@@ -141,6 +141,20 @@ void output_ftrace_object_block(OutputConfig *config, uint32_t thread_pid,
     fprintf(config->file,
             "%16s-%u [%03d] .... %12.6f: tracing_mark_write: C|%u|%s|%u\n",
             "rtos_obj", 1, cpu_id, t, 1, object_tag, begin ? 1 : 0);
+
+    fflush(config->file);
+}
+
+void output_ftrace_instant_event(OutputConfig *config, const char *name, uint64_t timestamp)
+{
+    if (!config || !config->file || first_switch || !name)
+        return;
+
+    double t = (timestamp - base_timestamp_us) / 1000000.0;
+
+    fprintf(config->file,
+            "%16s-0 [%03d] .... %12.6f: tracing_mark_write: I|0|%s\n",
+            name, cpu_id, t, name);
 
     fflush(config->file);
 }

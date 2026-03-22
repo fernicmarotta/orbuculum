@@ -16,6 +16,7 @@ void output_ftrace_itm_event(OutputConfig *config, ItmEventOutput *event, uint64
 void output_ftrace_object_block(OutputConfig *config, uint32_t thread_pid,
                                 const char *thread_name, const char *object_tag,
                                 bool begin, uint64_t timestamp);
+void output_ftrace_instant_event(OutputConfig *config, const char *name, uint64_t timestamp);
 void output_ftrace_reset(void);
 
 #endif

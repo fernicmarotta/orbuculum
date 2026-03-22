@@ -1080,8 +1080,12 @@ int main( int argc, char *argv[] )
                  * records arrive. */
                 if ( _r.ITMoverflows != ITMDecoderGetStats( &_r.i )->overflow )
                 {
-                    /* We had an overflow, so can't safely track max depth ... reset it */
                     _r.erDepth = 0;
+
+                    if ( _r.rtos && _r.rtos->enabled )
+                    {
+                        rtosHandleOverflow( _r.rtos, ticks_to_us( _r.rtos, _r.timeStamp ) );
+                    }
                 }
 
                 _r.ITMoverflows = ITMDecoderGetStats( &_r.i )->overflow;

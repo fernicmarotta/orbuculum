@@ -576,6 +576,18 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
 }
 
 
+void rtosHandleOverflow(struct rtosState *rtos, uint64_t timestamp)
+{
+    if (!rtos || !rtos->output_config)
+        return;
+
+    rtos->pending_object_addr = 0;
+    rtos->pending_prev_state = 0;
+
+    output_instant_event((OutputConfig *)rtos->output_config, "ITM_OVERFLOW", timestamp);
+}
+
+
 static void handle_context_switch(struct rtosState *rtos, struct rtosThread *thread,
                                    uint64_t timestamp)
 {

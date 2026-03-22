@@ -20,6 +20,7 @@ typedef void (*end_frame_fn)(OutputConfig*);
 typedef void (*thread_switch_fn)(OutputConfig*, struct rtosThread*, struct rtosThread*, uint64_t, char);
 typedef void (*itm_event_fn)(OutputConfig*, ItmEventOutput*, uint64_t);
 typedef void (*object_block_fn)(OutputConfig*, uint32_t, const char*, const char*, bool, uint64_t);
+typedef void (*instant_event_fn)(OutputConfig*, const char*, uint64_t);
 
 static const start_frame_fn start_frame_handlers[] = {
     [OUTPUT_CONSOLE] = output_console_start_frame,
@@ -90,6 +91,14 @@ static const object_block_fn object_block_handlers[] = {
     [OUTPUT_JSON_FILE] = NULL,
     [OUTPUT_JSON_UDP] = NULL,
     [OUTPUT_FTRACE] = output_ftrace_object_block,
+    [OUTPUT_DISABLED] = NULL
+};
+
+static const instant_event_fn instant_event_handlers[] = {
+    [OUTPUT_CONSOLE] = NULL,
+    [OUTPUT_JSON_FILE] = NULL,
+    [OUTPUT_JSON_UDP] = NULL,
+    [OUTPUT_FTRACE] = output_ftrace_instant_event,
     [OUTPUT_DISABLED] = NULL
 };
 
@@ -255,4 +264,14 @@ void output_object_block(OutputConfig *config, uint32_t thread_pid,
     object_block_fn handler = object_block_handlers[config->mode];
     if (handler)
         handler(config, thread_pid, thread_name, object_tag, begin, timestamp);
+}
+
+void output_instant_event(OutputConfig *config, const char *name, uint64_t timestamp)
+{
+    if (!config || config->mode == OUTPUT_DISABLED || config->mode >= sizeof(instant_event_handlers)/sizeof(instant_event_handlers[0]))
+        return;
+
+    instant_event_fn handler = instant_event_handlers[config->mode];
+    if (handler)
+        handler(config, name, timestamp);
 }
