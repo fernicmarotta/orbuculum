@@ -17,7 +17,7 @@
 
 volatile uint32_t rtos_obj_trace __attribute__((used));
 
-#define RTX5_RELEASE_BIT 4u   /* bit [2] = release event */
+#define RTX5_RELEASE_BIT 0x80000000u   /* bit [31] = release event */
 
 /* ================================================================
  * Blocking hooks (acquire) — override __WEAK stubs in rtx_evr.c

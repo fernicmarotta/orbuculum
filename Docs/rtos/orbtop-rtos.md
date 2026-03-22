@@ -649,23 +649,30 @@ proc rtos_dwt2_config {addr} {
 When orbtop-rtos starts with `-w rtos_obj_trace`, it looks up the symbol address
 in the ELF and calls `rtos_dwt2_config` via telnet to configure the watchpoint.
 
-##### Bit Encoding (bits [2:0])
+##### Bit Encoding (bit [31] + bits [1:0])
 
 Cortex-M SRAM objects are at least 4-byte aligned, so bits [1:0] of any object
-pointer are always zero. The firmware uses these bits to encode metadata:
+pointer are always zero. Bit [31] is always 0 in Cortex-M internal memory
+(SRAM at `0x20000000`, DTCM, Flash — all below `0x80000000`) <sup>[1](#ref1)</sup>. The firmware
+uses these bits to encode metadata:
 
 ```
-[31:3] = object address
-[2]    = 0: acquire (blocking), 1: release (unlock/give)
-[1:0]  = type hint (RTOS-specific — see per-RTOS docs)
+[31]    = 0: acquire (blocking), 1: release (unlock/give)
+[30:2]  = object address bits
+[1:0]   = type hint (RTOS-specific — see per-RTOS docs)
 ```
 
-The host strips bits [2:0] (`value & ~7u`) to recover the real address.
+The host extracts: `is_release = value >> 31`,
+`real_addr = value & 0x7FFFFFFCu`, `type_hint = value & 3u`.
 Writing `0` signals a voluntary delay (`prev_state=S`).
+
+> **Limitation**: Objects in external SDRAM mapped at `0x80000000` or higher
+> (FMC banks) are not supported because bit [31] would collide with the release
+> flag. Kernel synchronization objects should reside in internal SRAM.
 
 Each RTOS encodes type hints differently:
 - **FreeRTOS**: bits[1:0] = 00 Queue_t, 01 EventGroup, 10 StreamBuffer
-- **RTX5**: bits[1:0] = 00 always (type read from control block `id` byte via telnet)
+- **RTX5**: bits[1:0] = 00 always (type resolved once from control block `id` byte via telnet, then cached)
 - **Zephyr**: bits[1:0] = 00 mutex, 01 sem, 10 msgq, 11 event
 
 ##### Release Auto-Detection
@@ -1118,4 +1125,7 @@ Interval: 1000 ms, CPU Usage: 45.234%,  Max: 82.345%, CPU Freq: 480000000Hz [WAR
 - [FreeRTOS Documentation](https://www.freertos.org/Documentation/RTOS_book.html)
 - [Zephyr Thread Info Debug](https://docs.zephyrproject.org/latest/services/debugging/thread-analyzer.html)
 - [ARM DWT Programming](https://developer.arm.com/documentation/ddi0403/e/)
-- [Orbuculum Documentation](https://github.com/orbcode/orbuculum)
+
+<a id="ref1"></a> **[1]** ARMv7-M Architecture Reference Manual, table B3-1 "System address map" —
+[ARM DDI 0403E](https://developer.arm.com/documentation/ddi0403/latest/) |
+[ARMv8-M equivalent (DDI 0553)](https://developer.arm.com/documentation/ddi0553/latest/)

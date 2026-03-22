@@ -41,19 +41,19 @@ Perfetto.
                                         C|1|mutex:TestMutex|0
 ```
 
-## Type Encoding (bits [2:0])
+## Type Encoding (bit [31] + bits [1:0])
 
-The DWT comp1 value uses three low bits for metadata. Cortex-M SRAM
-objects are 4+ byte aligned, so bits [2:0] are always zero in real
-pointers and are free for encoding:
+The DWT comp1 value uses bit [31] for acquire/release and bits [1:0] for
+type hints. Cortex-M SRAM objects are 4-byte aligned (bits [1:0] = 0),
+and all internal memory has bit [31] = 0:
 
 ```
-[31:3] = object address
-[2]    = 0: acquire (blocking), 1: release
-[1:0]  = type hint (see table below)
+[31]    = 0: acquire (blocking), 1: release
+[30:2]  = object address bits
+[1:0]   = type hint (see table below)
 ```
 
-The host strips all three bits (`& ~7u`) to recover the real address.
+The host extracts: `real_addr = value & 0x7FFFFFFCu`.
 
 | bits[1:0] | Tag      | Objects                                                |
 |-----------|----------|--------------------------------------------------------|
@@ -110,10 +110,10 @@ The header defines blocking hooks (acquire) and release hooks for all
 FreeRTOS object types: Queue_t (mutex, semaphore, queue), EventGroup,
 and StreamBuffer.
 
-**Blocking hooks** (acquire): bit [2]=0. The host emits `C|1` and sets
+**Blocking hooks** (acquire): bit [31]=0. The host emits `C|1` and sets
 `prev_state=D` in ftrace.
 
-**Release hooks** (optional): bit [2]=1. The host emits `C|0` at the exact
+**Release hooks** (optional): bit [31]=1. The host emits `C|0` at the exact
 release time. Without release hooks, `C|0` is emitted at the next context
 switch — still functional but less precise.
 

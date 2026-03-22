@@ -40,13 +40,13 @@ time from scheduling latency.
 ## Type Encoding
 
 Zephyr kernel objects have no common type identifier.  The firmware encodes
-the object type and acquire/release direction in bits [2:0] of the address
-written to `rtos_obj_trace`:
+the object type in bits [1:0] and the acquire/release direction in bit [31]
+of the value written to `rtos_obj_trace`:
 
 ```
-[31:3] = object address
-[2]    = 0: acquire (blocking), 1: release (unlock/give/post)
-[1:0]  = type tag (00:mutex, 01:sem, 10:msgq, 11:event)
+[31]    = 0: acquire (blocking), 1: release (unlock/give/post)
+[30:2]  = object address bits
+[1:0]   = type tag (00:mutex, 01:sem, 10:msgq, 11:event)
 ```
 
 | bits [1:0] | Type tag | Objects                                       | Prefix     |
@@ -57,9 +57,9 @@ written to `rtos_obj_trace`:
 | 11         | EVENT    | `k_event`, `k_condvar`                          | `evtflags` |
 | value = 0  | —        | delay / sleep                                   | —          |
 
-Since all Cortex-M SRAM addresses are at least 4-byte aligned, bits [2:0]
-are always 0 in real pointers.  The host strips these bits to recover the
-actual address.
+Cortex-M SRAM addresses are 4-byte aligned (bits [1:0] = 0) and all
+internal memory has bit [31] = 0.  The host extracts:
+`real_addr = value & 0x7FFFFFFCu`.
 
 ### Objects grouped under MSGQ (tag 10)
 

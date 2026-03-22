@@ -428,18 +428,23 @@ void rtosHandleObjectEvent(struct rtosState *rtos, struct SymbolSet *symbols,
     if (value == 0xFFFFFFFF)
         return;
 
-    /* Bits [2:0] encode release flag + type hint from firmware.
-     * All Cortex-M SRAM objects are 8-byte aligned (or at least 4-byte),
-     * so bits [2:0] are always 0 in real pointers.
+    /* Bit [31] = release flag, bits [1:0] = type hint from firmware.
+     * Cortex-M SRAM objects are 4-byte aligned, so bits [1:0] are always 0
+     * in real pointers.  Bit [31] is safe because all Cortex-M internal
+     * memory (SRAM, DTCM, Flash) has bit [31] = 0.
      *
-     * [2]    = 0: acquire (blocking), 1: release (unlock/give/post)
-     * [1:0]  = type hint (RTOS-specific):
+     * [31]    = 0: acquire (blocking), 1: release (unlock/give/post)
+     * [30:2]  = object address bits
+     * [1:0]   = type hint (RTOS-specific):
      *   FreeRTOS:  00=Queue_t, 01=EventGroup_t, 10=StreamBuffer_t
      *   Zephyr:    00=mutex, 01=sem, 10=msgq, 11=event
-     *   RTX5:      00 (type from control block id byte) */
-    bool is_release = (value & 4u) != 0;
+     *   RTX5:      00 (type from control block id byte)
+     *
+     * Note: objects in external SDRAM (0x80000000+) are NOT supported
+     * because bit [31] would collide with the release flag. */
+    bool is_release = (value >> 31) != 0;
     uint8_t type_hint = (uint8_t)(value & 3u);
-    uint32_t real_addr = value & ~7u;
+    uint32_t real_addr = value & 0x7FFFFFFCu;
     bool is_non_queue = (type_hint != 0);
 
     if (!real_addr)

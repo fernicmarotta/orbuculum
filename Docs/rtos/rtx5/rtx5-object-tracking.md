@@ -40,19 +40,19 @@ Perfetto.
                                        C|1|mutex:MyMutex|0
 ```
 
-## Type Encoding (bits [2:0])
+## Type Encoding (bit [31] + bits [1:0])
 
-The DWT comp1 value uses bit [2] for acquire/release signaling. RTX5
+The DWT comp1 value uses bit [31] for acquire/release signaling. RTX5
 control blocks have an `id` byte at offset 0 that the host reads via
 telnet — no firmware type hint in bits [1:0] is needed (always 0).
 
 ```
-[31:3] = object address
-[2]    = 0: acquire (blocking), 1: release
-[1:0]  = 00 (unused — type from control block id byte)
+[31]    = 0: acquire (blocking), 1: release
+[30:2]  = object address bits
+[1:0]   = 00 (unused — type from control block id byte)
 ```
 
-The host strips bits [2:0] (`& ~7u`) to recover the real address.
+The host extracts: `real_addr = value & 0x7FFFFFFCu`.
 
 ## Supported Object Types
 
@@ -106,10 +106,10 @@ to block (acquire) or when an object operation completes (release). Our
 implementations override the weak stubs with a single write to
 `rtos_obj_trace`, which triggers DWT comparator 1.
 
-**Blocking hooks** (acquire): bit [2]=0. The host emits `C|1` and sets
+**Blocking hooks** (acquire): bit [31]=0. The host emits `C|1` and sets
 `prev_state=D` in ftrace.
 
-**Release hooks** (optional): bit [2]=1. The host emits `C|0` at the exact
+**Release hooks** (optional): bit [31]=1. The host emits `C|0` at the exact
 release time. Without release hooks, `C|0` is emitted at the next context
 switch — still functional but less precise.
 

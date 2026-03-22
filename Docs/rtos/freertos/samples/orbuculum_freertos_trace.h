@@ -16,7 +16,7 @@
 
 extern volatile uint32_t rtos_obj_trace;
 
-#define FREERTOS_RELEASE_BIT 4u   /* bit [2] = release event */
+#define FREERTOS_RELEASE_BIT 0x80000000u   /* bit [31] = release event */
 
 /* ================================================================
  * Blocking hooks (acquire) — DWT comp1 writes

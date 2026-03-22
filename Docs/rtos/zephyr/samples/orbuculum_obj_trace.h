@@ -25,8 +25,8 @@ extern volatile uint32_t rtos_obj_trace;
 #define ZEPHYR_OBJ_MSGQ   2u  /* 10 */
 #define ZEPHYR_OBJ_EVENT  3u  /* 11 */
 
-/* Release flag — bit [2] */
-#define ZEPHYR_RELEASE_BIT 4u
+/* Release flag — bit [31] */
+#define ZEPHYR_RELEASE_BIT 0x80000000u
 
 /* ================================================================
  * Blocking hooks (acquire)
