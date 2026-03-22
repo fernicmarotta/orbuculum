@@ -87,14 +87,6 @@ actual address.
 `k_fifo`, `k_lifo`, `k_poll`, `k_heap`, `k_timer`, `k_thread_join` — these
 have no `_blocking` hook in the Zephyr tracing API.
 
-## prev_state Mapping
-
-| Value written to `rtos_obj_trace` | Meaning              | ftrace `prev_state` |
-|----------------------------------|----------------------|---------------------|
-| Object address \| tag (non-zero)  | Blocked on object    | `D`                 |
-| `0`                               | Delay / sleep        | `S`                 |
-| `0xFFFFFFFF`                      | Invalid (ignored)    | —                   |
-
 ## Firmware Setup
 
 ### 1. Kconfig (`prj.conf`)
@@ -214,42 +206,12 @@ proc rtos_dwt2_config {addr} {
     -K trace.ftrace
 ```
 
-| Option | Description                                     |
-|--------|-------------------------------------------------|
-| `-e`   | ELF file (for DWARF + symbols)                  |
-| `-T`   | RTOS type (`zephyr`)                            |
-| `-w`   | Watchpoint variable for object tracking (comp1) |
-| `-s`   | orbuculum server (host:port)                    |
-| `-W`   | OpenOCD telnet port                             |
-| `-F`   | CPU frequency in Hz                             |
-| `-p`   | Trace protocol (`ITM` or `ETM`)                 |
-| `-K`   | ftrace output file                              |
+See [Usage Examples](../orbtop-rtos.md#usage-examples) for all command-line options.
 
 ## How It Works Internally
 
-### Type detection (firmware-side, via type tag)
-
-The object type and acquire/release direction are encoded by the firmware
-in bits [2:0] of the value written to `rtos_obj_trace`.
-
-When `rtosHandleObjectEvent()` receives a DWT comp1 value:
-
-1. **Strip bits [2:0]** → `is_release` (bit 2), `type_hint` (bits 1:0), `real_addr`
-2. If **release**: look up existing object, emit C|0 at release timestamp
-3. If **acquire**: store `type_hint` in `rtos->pending_type_hint`,
-   call `zephyr_read_object_info()` which maps `type_hint` to
-   `rtosObjectType` and prefix string, emit C|1
-
-No telnet memory reads are needed for type detection — the firmware
-already encoded the type.
-
-### Release event auto-detection
-
-The host auto-detects whether firmware has release hooks on a per-object
-basis.  The first blocking+context-switch cycle for each object uses
-backward-compatible behavior (C|0 at context switch).  Once a release
-event arrives for an object, subsequent cycles keep the counter high
-until the release, showing true contention time in Perfetto.
+For the generic object tracking mechanism (bit encoding, release auto-detection),
+see [Object Tracking Internals](../orbtop-rtos.md#object-tracking-internals).
 
 ### Name resolution
 
@@ -259,26 +221,11 @@ always the hex address:
 
 ## Ftrace Output
 
+See [Ftrace Output Reference](../ftrace/ftrace-output.md) for the full format
+specification (sched_switch states, Perfetto visualization).
 All examples below are from a real Zephyr capture (`zephyr_example_trace.ftrace`,
 STM32H743, 480 MHz). Zephyr objects have no name registries — all objects show
 as hex addresses.
-
-### Context switches by state
-
-**Preempted (R)** — thread still runnable, yielded to equal/higher priority:
-```
-mutex_a_tid|task_mutex_a-603981200 [000] ....     0.116787: sched_switch: prev_comm=mutex_a_tid|task_mutex_a prev_pid=603981200 prev_prio=5 prev_state=R ==> next_comm=producer_tid|task_producer next_pid=603980048 next_prio=5
-```
-
-**Sleeping (S)** — thread called `k_sleep` / `k_msleep`:
-```
-producer_tid|task_producer-603980048 [000] ....     2.366437: sched_switch: prev_comm=producer_tid|task_producer prev_pid=603980048 prev_prio=5 prev_state=S ==> next_comm=mutex_b_tid|task_mutex_b next_pid=603981008 next_prio=5
-```
-
-**Blocked on object (D)** — thread waiting on mutex/sem/msgq/event:
-```
-mutex_b_tid|task_mutex_b-603981008 [000] ....     2.235023: sched_switch: prev_comm=mutex_b_tid|task_mutex_b prev_pid=603981008 prev_prio=5 prev_state=D ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
-```
 
 ### Object tracking — acquire/release pairs
 
@@ -306,33 +253,6 @@ Each pair shows `C|1` (acquire = thread blocks) and `C|0` (release = object free
 ```
         rtos_obj-1 [000] ....     2.600233: tracing_mark_write: C|1|msgqueue:0x240000A8|1
         rtos_obj-1 [000] ....     2.775439: tracing_mark_write: C|1|msgqueue:0x240000A8|0
-```
-
-### Delay events
-
-When `rtos_obj_trace = 0` (k_sleep), the context switch shows `prev_state=S`
-with no object counter event:
-```
-event_tid|task_event_consumer-603980240 [000] ....     2.381083: sched_switch: prev_comm=event_tid|task_event_consumer prev_pid=603980240 prev_prio=5 prev_state=S ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
-```
-
-### Batch release pattern
-
-When a producer signals multiple consumers, multiple `C|0` events appear at
-nearly the same timestamp:
-```
-        rtos_obj-1 [000] ....     2.775439: tracing_mark_write: C|1|msgqueue:0x240000A8|0
-        rtos_obj-1 [000] ....     2.775444: tracing_mark_write: C|1|sem:0x240000E8|0
-        rtos_obj-1 [000] ....     2.775454: tracing_mark_write: C|1|evtflags:0x24000DC8|0
-```
-
-### Complete sequence — mutex contention
-
-A full blocking cycle: thread blocks, context switch, release, resume:
-```
-        rtos_obj-1 [000] ....     2.235014: tracing_mark_write: C|1|mutex:0x24000090|1
-mutex_b_tid|task_mutex_b-603981008 [000] ....     2.235023: sched_switch: prev_comm=mutex_b_tid|task_mutex_b prev_pid=603981008 prev_prio=5 prev_state=D ==> next_comm=mutex_a_tid|task_mutex_a next_pid=603981200 next_prio=5
-        rtos_obj-1 [000] ....     2.264211: tracing_mark_write: C|1|mutex:0x24000090|0
 ```
 
 ## Limitations

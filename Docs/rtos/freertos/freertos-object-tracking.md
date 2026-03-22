@@ -161,8 +161,8 @@ set DWT_FUNC1 0xE0001038
 proc rtos_dwt2_config {addr} {
     global DWT_COMP1 DWT_MASK1 DWT_FUNC1
     mww $DWT_COMP1 $addr
-    mww $DWT_MASK2 0
-    mww $DWT_FUNC2 0x0D
+    mww $DWT_MASK1 0
+    mww $DWT_FUNC1 0x0D
     echo "DWT Comparator 1 configured for data write+value at [format 0x%08X $addr]"
 }
 ```
@@ -181,30 +181,13 @@ proc rtos_dwt2_config {addr} {
     -K trace.ftrace
 ```
 
-| Option | Description                                     |
-|--------|-------------------------------------------------|
-| `-e`   | Firmware ELF file (for DWARF + symbols)         |
-| `-T`   | RTOS type (`freertos`, `rtx5`, `zephyr`)        |
-| `-w`   | Watchpoint variable for object tracking (comp1) |
-| `-s`   | orbuculum server (host:port)                    |
-| `-W`   | OpenOCD telnet port                             |
-| `-F`   | CPU frequency in Hz                             |
-| `-p`   | Trace protocol (`ITM` or `ETM`)                 |
-| `-K`   | ftrace output file                              |
+See [Usage Examples](../orbtop-rtos.md#usage-examples) for all command-line options.
 
 ## How It Works Internally
 
-### Bit stripping and type detection
-
-When a DWT comp1 event arrives, the host:
-
-1. Strips bits [2:0]: `is_release = (value & 4) != 0`, `type_hint = value & 3`,
-   `real_addr = value & ~7u`
-2. If `real_addr == 0`: delay event → `pending_prev_state = 'S'`, return
-3. If `is_release`: look up existing object; if `blocking_active`, emit `C|0`
-   and set `has_release_hooks = true`. Spurious releases are silently ignored.
-4. If acquire: look up or create object, call `freertos_read_object_info()`,
-   emit `C|1`, set `blocking_active = true`
+For the generic object tracking mechanism (bit encoding, release auto-detection,
+prev_state mapping), see
+[Object Tracking Internals](../orbtop-rtos.md#object-tracking-internals).
 
 ### Type detection (DWARF-based)
 
@@ -225,30 +208,6 @@ For Queue_t objects (type_hint=0):
 
 For EventGroup (type_hint=1) and StreamBuffer (type_hint=2), the type comes
 from the firmware hint — Queue_t validation is skipped entirely.
-
-### Release auto-detection
-
-The host auto-detects per object whether firmware has release hooks:
-
-- **First blocking cycle**: `has_release_hooks` is false. The `C|0` is
-  emitted at the context switch (backward compatible).
-- **First release event**: sets `has_release_hooks = true` permanently
-  for that object. From then on, `C|0` is emitted at release time, and
-  the counter stays high through context switches.
-
-This means the first cycle for each object uses backward-compatible timing.
-All subsequent cycles show precise contention (counter high from blocking
-to release).
-
-### prev_state mapping
-
-| Value written to `rtos_obj_trace`  | Meaning              | ftrace `prev_state` |
-|------------------------------------|----------------------|---------------------|
-| Queue_t address (bits[2:0]=000)     | Blocked on queue obj | `D`                 |
-| EventGroup_t addr \| 1 (bits=001)  | Blocked on evtflags  | `D`                 |
-| StreamBuffer_t addr \| 2 (bits=010) | Blocked on stream    | `D`                 |
-| Any addr \| 4 (bit[2]=1)           | Release event        | —                   |
-| `0`                                 | Delay / sleep        | `S`                 |
 
 ## Limitations
 
@@ -284,25 +243,10 @@ core), which is not yet supported.
 
 ## Ftrace Output
 
+See [Ftrace Output Reference](../ftrace/ftrace-output.md) for the full format
+specification (sched_switch states, ITM stimulus channels, Perfetto visualization).
 All examples below are from a real FreeRTOS capture (`freertos_pcs_260_autotest_trace.ftrace`,
 STM32H7, 480 MHz).
-
-### Context switches by state
-
-**Preempted (R)** — thread still runnable, higher-priority thread took CPU:
-```
-mutexA|task_mutex_a-604019640 [000] ....  1668.583580: sched_switch: prev_comm=mutexA|task_mutex_a prev_pid=604019640 prev_prio=24 prev_state=R ==> next_comm=autotestTask|autotest_task next_pid=604032448 next_prio=25
-```
-
-**Sleeping (S)** — thread called `vTaskDelay` / `osDelay`:
-```
-blinkTask|blink_task-604027912 [000] ....   614.533882: sched_switch: prev_comm=blinkTask|blink_task prev_pid=604027912 prev_prio=24 prev_state=S ==> next_comm=mutexA|task_mutex_a next_pid=604019640 next_prio=24
-```
-
-**Blocked on object (D)** — thread waiting on mutex/sem/queue:
-```
-mutexB|task_mutex_b-604021104 [000] ....   614.510154: sched_switch: prev_comm=mutexB|task_mutex_b prev_pid=604021104 prev_prio=24 prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
-```
 
 ### Object tracking — acquire/release pairs
 
@@ -344,28 +288,3 @@ Each pair shows `C|1` (acquire = thread blocks) and `C|0` (release = object free
         rtos_obj-1 [000] ....  2177.550138: tracing_mark_write: C|1|rmutex:0x2400CFE8|0
 ```
 
-### Delay events
-
-When `rtos_obj_trace = 0` (delay), the context switch shows `prev_state=S`
-with no object counter event:
-```
-producer|task_producer-604026960 [000] ....   614.528683: sched_switch: prev_comm=producer|task_producer prev_pid=604026960 prev_prio=24 prev_state=S ==> next_comm=blinkTask|blink_task next_pid=604027912 next_prio=24
-```
-
-### ITM stimulus channels
-
-Firmware writes to ITM stimulus ports appear as `C|0|tag|value` counters:
-```
-           <...>-0 [000] ....  1094.505372: tracing_mark_write: C|0|signal_1|45
-           <...>-0 [000] ....  1094.505667: tracing_mark_write: C|0|signal_2|207
-           <...>-0 [000] ....  1094.505954: tracing_mark_write: C|0|signal_3|70
-```
-
-### Complete sequence — mutex contention
-
-A full blocking cycle: thread blocks, context switch, release, resume:
-```
-        rtos_obj-1 [000] ....   614.506031: tracing_mark_write: C|1|mutex:TestMutex|1
-mutexB|task_mutex_b-604021104 [000] ....   614.510154: sched_switch: prev_comm=mutexB|task_mutex_b prev_pid=604021104 prev_prio=24 prev_state=D ==> next_comm=semWait|task_sem_wait next_pid=604022568 next_prio=24
-        rtos_obj-1 [000] ....   614.510154: tracing_mark_write: C|1|mutex:TestMutex|0
-```

@@ -1066,8 +1066,29 @@ is pumping out clean SWO data. This information is just left here to show the fl
 orbtop-rtos: RTOS-aware Performance Profiling
 ==============================================
 
-`orbtop-rtos` extends the functionality of `orbtop` by adding RTOS-aware thread profiling capabilities.
-It provides detailed per-thread CPU usage statistics, context switch analysis, and kernel object
+Non-intrusive RTOS profiling for ARM Cortex-M using hardware trace (DWT/ITM).
+An open-source alternative to commercial tools — no vendor lock-in, no runtime
+library in your firmware, just a single `volatile` store per hook.
+
+| | orbtop-rtos | Tracealyzer | SystemView | CMSIS-View |
+|---|---|---|---|---|
+| **Price** | Free (open source) | $1,700/year | Free (probe lock-in) | Free (IDE lock-in) |
+| **Firmware impact** | 1 volatile store per hook | Recorder library (~5-15 KB) | Library (~2-5 KB) | Event Recorder lib |
+| **Probe requirement** | Any SWO/SWD (ORBTrace, J-Link, BMP) | Any | J-Link only | ULINKplus only |
+| **IDE requirement** | None (CLI) | Standalone GUI | Standalone GUI | Keil µVision only |
+| **RTOS support** | FreeRTOS, Zephyr, RTX5 | FreeRTOS, Zephyr, +others | FreeRTOS, embOS, +others | RTX5 only |
+| **Visualization** | [Perfetto UI](https://ui.perfetto.dev) (free, web) | Proprietary GUI | Proprietary GUI | µVision Event Viewer |
+| **Object tracking** | Mutex, sem, queue, event | Full kernel object view | Full kernel object view | EVR events |
+
+![FreeRTOS overview](Docs/rtos/ftrace/perfetto_freertos_overview.png)
+*FreeRTOS on STM32H7 at 480 MHz: 8 threads, context switches, and kernel object blocking
+(mutex, semaphore) over a 15-second capture. Visualized in Perfetto UI.*
+
+![Zephyr object tracking](Docs/rtos/ftrace/perfetto_zephyr_dstate.png)
+*Zephyr: 4 object types (mutex, semaphore, message queue, event) tracked simultaneously
+across 8 threads.*
+
+`orbtop-rtos` provides per-thread CPU usage statistics, context switch analysis, and kernel object
 blocking tracking for ARM Cortex-M targets.
 
 Supported RTOS:

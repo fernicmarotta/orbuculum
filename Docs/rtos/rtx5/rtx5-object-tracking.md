@@ -133,8 +133,8 @@ set DWT_FUNC1 0xE0001038
 proc rtos_dwt2_config {addr} {
     global DWT_COMP1 DWT_MASK1 DWT_FUNC1
     mww $DWT_COMP1 $addr
-    mww $DWT_MASK2 0
-    mww $DWT_FUNC2 0x0D
+    mww $DWT_MASK1 0
+    mww $DWT_FUNC1 0x0D
     echo "DWT Comparator 1 configured for data write+value at [format 0x%08X $addr]"
 }
 ```
@@ -158,19 +158,8 @@ in the ELF and configure DWT comparator 1 via `rtos_dwt2_config`.
 
 ## How It Works Internally
 
-### Release auto-detection
-
-The host auto-detects per object whether firmware has release hooks:
-
-- **First blocking cycle**: `has_release_hooks` is false. The `C|0` is
-  emitted at the context switch (backward compatible).
-- **First release event**: sets `has_release_hooks = true` permanently
-  for that object. From then on, `C|0` is emitted at release time, and
-  the counter stays high through context switches.
-
-This means the first cycle for each object uses backward-compatible timing.
-All subsequent cycles show precise contention (counter high from blocking
-to release).
+For the generic object tracking mechanism (bit encoding, release auto-detection),
+see [Object Tracking Internals](../orbtop-rtos.md#object-tracking-internals).
 
 ## Ftrace Output
 

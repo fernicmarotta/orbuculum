@@ -24,6 +24,7 @@
      - [ITM Stimulus Channels](#itm-stimulus-channels--c)
      - [Combined Example](#combined-example-threads--objects--itm)
      - [Visualization](#visualization)
+     - [Object Tracking Internals](#object-tracking-internals)
 7. [Usage Examples](#usage-examples)
 8. [Thread Switch Detection and Processing](#thread-switch-detection-and-processing)
 9. [Adding Support for Other RTOS](#adding-support-for-other-rtos)
@@ -616,6 +617,70 @@ Open the `.ftrace` file in:
 
 - **[Perfetto](https://ui.perfetto.dev)** — drag and drop the file. Thread timeline, object counter tracks, and ITM counters all appear as separate tracks.
 - **Eclipse TraceCompass** — File > Open Trace, select file, choose "ftrace" type. Install "Trace Compass ftrace (Incubation)" plugin if needed.
+
+#### Object Tracking Internals
+
+Object tracking uses DWT Comparator 1 to watch for writes to the `rtos_obj_trace`
+variable in firmware. This section covers the generic mechanism shared by all RTOS
+plugins. For RTOS-specific details (firmware hooks, type encoding, naming), see the
+per-RTOS guides:
+[FreeRTOS](freertos/freertos-object-tracking.md) |
+[RTX5](rtx5/rtx5-object-tracking.md) |
+[Zephyr](zephyr/zephyr-object-tracking.md)
+
+##### DWT Comparator 1 Configuration
+
+The `rtos_dwt2_config` proc (in your OpenOCD board config) configures DWT Comparator 1:
+
+```tcl
+set DWT_COMP1 0xE0001030
+set DWT_MASK1 0xE0001034
+set DWT_FUNC1 0xE0001038
+
+proc rtos_dwt2_config {addr} {
+    global DWT_COMP1 DWT_MASK1 DWT_FUNC1
+    mww $DWT_COMP1 $addr
+    mww $DWT_MASK1 0
+    mww $DWT_FUNC1 0x0D
+    echo "DWT Comparator 1 configured for data write+value at [format 0x%08X $addr]"
+}
+```
+
+When orbtop-rtos starts with `-w rtos_obj_trace`, it looks up the symbol address
+in the ELF and calls `rtos_dwt2_config` via telnet to configure the watchpoint.
+
+##### Bit Encoding (bits [2:0])
+
+Cortex-M SRAM objects are at least 4-byte aligned, so bits [1:0] of any object
+pointer are always zero. The firmware uses these bits to encode metadata:
+
+```
+[31:3] = object address
+[2]    = 0: acquire (blocking), 1: release (unlock/give)
+[1:0]  = type hint (RTOS-specific — see per-RTOS docs)
+```
+
+The host strips bits [2:0] (`value & ~7u`) to recover the real address.
+Writing `0` signals a voluntary delay (`prev_state=S`).
+
+Each RTOS encodes type hints differently:
+- **FreeRTOS**: bits[1:0] = 00 Queue_t, 01 EventGroup, 10 StreamBuffer
+- **RTX5**: bits[1:0] = 00 always (type read from control block `id` byte via telnet)
+- **Zephyr**: bits[1:0] = 00 mutex, 01 sem, 10 msgq, 11 event
+
+##### Release Auto-Detection
+
+The host auto-detects per object whether firmware provides release hooks:
+
+- **First blocking cycle**: `has_release_hooks` is false. The `C|0` is
+  emitted at the context switch (backward compatible).
+- **First release event**: sets `has_release_hooks = true` permanently
+  for that object. From then on, `C|0` is emitted at release time, and
+  the counter stays high through context switches.
+
+This means the first cycle for each object uses backward-compatible timing.
+All subsequent cycles show precise contention (counter high from blocking
+to release). Firmware without release hooks works exactly as before.
 
 ### Usage Examples
 
